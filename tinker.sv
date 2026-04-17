@@ -2053,7 +2053,23 @@ module tinker_core (
                                     end
                                     OP_RET: begin
                                         branch_spec_taken = 1'b1;
-                                        branch_spec_target = (ret_sp > 0) ? ret_stack[ret_sp - 1] : bp_predict_target;
+                                        if (ret_sp > 0) begin
+                                            branch_spec_target = ret_stack[ret_sp - 1];
+                                        end else if (lsq_dispatch0_addr_ready) begin
+                                            branch_spec_target =
+                                                ((commit_mem_write &&
+                                                  (commit_mem_addr == (lsq_dispatch0_addr_val - 64'd8))) ? commit_mem_data : {
+                                                memory.bytes[lsq_dispatch0_addr_val - 64'd1],
+                                                memory.bytes[lsq_dispatch0_addr_val - 64'd2],
+                                                memory.bytes[lsq_dispatch0_addr_val - 64'd3],
+                                                memory.bytes[lsq_dispatch0_addr_val - 64'd4],
+                                                memory.bytes[lsq_dispatch0_addr_val - 64'd5],
+                                                memory.bytes[lsq_dispatch0_addr_val - 64'd6],
+                                                memory.bytes[lsq_dispatch0_addr_val - 64'd7],
+                                                memory.bytes[lsq_dispatch0_addr_val - 64'd8]});
+                                        end else begin
+                                            branch_spec_target = bp_predict_target;
+                                        end
                                     end
                                     default: begin
                                     end
@@ -2379,7 +2395,23 @@ module tinker_core (
                                             end
                                             OP_RET: begin
                                                 branch_spec_taken = 1'b1;
-                                                branch_spec_target = (ret_sp > 0) ? ret_stack[ret_sp - 1] : bp_predict_target1;
+                                                if (ret_sp > 0) begin
+                                                    branch_spec_target = ret_stack[ret_sp - 1];
+                                                end else if (lsq_dispatch1_addr_ready) begin
+                                                    branch_spec_target =
+                                                        ((commit_mem_write &&
+                                                          (commit_mem_addr == (lsq_dispatch1_addr_val - 64'd8))) ? commit_mem_data : {
+                                                        memory.bytes[lsq_dispatch1_addr_val - 64'd1],
+                                                        memory.bytes[lsq_dispatch1_addr_val - 64'd2],
+                                                        memory.bytes[lsq_dispatch1_addr_val - 64'd3],
+                                                        memory.bytes[lsq_dispatch1_addr_val - 64'd4],
+                                                        memory.bytes[lsq_dispatch1_addr_val - 64'd5],
+                                                        memory.bytes[lsq_dispatch1_addr_val - 64'd6],
+                                                        memory.bytes[lsq_dispatch1_addr_val - 64'd7],
+                                                        memory.bytes[lsq_dispatch1_addr_val - 64'd8]});
+                                                end else begin
+                                                    branch_spec_target = bp_predict_target1;
+                                                end
                                             end
                                             default: begin
                                             end
