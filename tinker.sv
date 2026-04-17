@@ -399,6 +399,14 @@ module tinker_core (
     wire [63:0] bp_predict_target1;
     wire [95:0] phys_ready_bus;
     wire [6143:0] phys_value_bus;
+    wire [95:0] sched_ready_bus;
+    wire [6143:0] sched_value_bus;
+    wire head_stage_ready_now;
+    wire [63:0] head_stage_value_now;
+    wire head_stage_has_dest_now;
+    wire second_stage_ready_now;
+    wire [63:0] second_stage_value_now;
+    wire second_stage_has_dest_now;
     wire [3:0] alu_rs_free_count;
     wire [3:0] fpu_rs_free_count;
     wire alu_issue_valid0;
@@ -710,11 +718,72 @@ module tinker_core (
     assign cdb5_en = ls1_s1_valid && ls1_s1_has_dest;
     assign cdb5_tag = ls1_s1_dest;
     assign cdb5_val = ls1_s1_res;
+    assign head_stage_ready_now =
+        (alu0_s1_valid && (alu0_s1_rob == rob_head)) ||
+        (alu1_s1_valid && (alu1_s1_rob == rob_head)) ||
+        (fpu0_valid[4] && (fpu0_rob[4] == rob_head)) ||
+        (fpu1_valid[4] && (fpu1_rob[4] == rob_head)) ||
+        (ls0_s1_valid && (ls0_s1_rob == rob_head)) ||
+        (ls1_s1_valid && (ls1_s1_rob == rob_head));
+    assign head_stage_has_dest_now =
+        (alu0_s1_valid && (alu0_s1_rob == rob_head)) ? alu0_s1_has_dest :
+        (alu1_s1_valid && (alu1_s1_rob == rob_head)) ? alu1_s1_has_dest :
+        (fpu0_valid[4] && (fpu0_rob[4] == rob_head)) ? 1'b1 :
+        (fpu1_valid[4] && (fpu1_rob[4] == rob_head)) ? 1'b1 :
+        (ls0_s1_valid && (ls0_s1_rob == rob_head)) ? ls0_s1_has_dest :
+        (ls1_s1_valid && (ls1_s1_rob == rob_head)) ? ls1_s1_has_dest :
+        1'b0;
+    assign head_stage_value_now =
+        (alu0_s1_valid && (alu0_s1_rob == rob_head)) ? alu0_s1_res :
+        (alu1_s1_valid && (alu1_s1_rob == rob_head)) ? alu1_s1_res :
+        (fpu0_valid[4] && (fpu0_rob[4] == rob_head)) ? fpu0_res[4] :
+        (fpu1_valid[4] && (fpu1_rob[4] == rob_head)) ? fpu1_res[4] :
+        (ls0_s1_valid && (ls0_s1_rob == rob_head)) ? ls0_s1_res :
+        (ls1_s1_valid && (ls1_s1_rob == rob_head)) ? ls1_s1_res :
+        64'b0;
+    assign second_stage_ready_now =
+        (alu0_s1_valid && (alu0_s1_rob == ((rob_head + 1) % ROB_SIZE))) ||
+        (alu1_s1_valid && (alu1_s1_rob == ((rob_head + 1) % ROB_SIZE))) ||
+        (fpu0_valid[4] && (fpu0_rob[4] == ((rob_head + 1) % ROB_SIZE))) ||
+        (fpu1_valid[4] && (fpu1_rob[4] == ((rob_head + 1) % ROB_SIZE))) ||
+        (ls0_s1_valid && (ls0_s1_rob == ((rob_head + 1) % ROB_SIZE))) ||
+        (ls1_s1_valid && (ls1_s1_rob == ((rob_head + 1) % ROB_SIZE)));
+    assign second_stage_has_dest_now =
+        (alu0_s1_valid && (alu0_s1_rob == ((rob_head + 1) % ROB_SIZE))) ? alu0_s1_has_dest :
+        (alu1_s1_valid && (alu1_s1_rob == ((rob_head + 1) % ROB_SIZE))) ? alu1_s1_has_dest :
+        (fpu0_valid[4] && (fpu0_rob[4] == ((rob_head + 1) % ROB_SIZE))) ? 1'b1 :
+        (fpu1_valid[4] && (fpu1_rob[4] == ((rob_head + 1) % ROB_SIZE))) ? 1'b1 :
+        (ls0_s1_valid && (ls0_s1_rob == ((rob_head + 1) % ROB_SIZE))) ? ls0_s1_has_dest :
+        (ls1_s1_valid && (ls1_s1_rob == ((rob_head + 1) % ROB_SIZE))) ? ls1_s1_has_dest :
+        1'b0;
+    assign second_stage_value_now =
+        (alu0_s1_valid && (alu0_s1_rob == ((rob_head + 1) % ROB_SIZE))) ? alu0_s1_res :
+        (alu1_s1_valid && (alu1_s1_rob == ((rob_head + 1) % ROB_SIZE))) ? alu1_s1_res :
+        (fpu0_valid[4] && (fpu0_rob[4] == ((rob_head + 1) % ROB_SIZE))) ? fpu0_res[4] :
+        (fpu1_valid[4] && (fpu1_rob[4] == ((rob_head + 1) % ROB_SIZE))) ? fpu1_res[4] :
+        (ls0_s1_valid && (ls0_s1_rob == ((rob_head + 1) % ROB_SIZE))) ? ls0_s1_res :
+        (ls1_s1_valid && (ls1_s1_rob == ((rob_head + 1) % ROB_SIZE))) ? ls1_s1_res :
+        64'b0;
     genvar g;
     generate
         for (g = 0; g < PHYS_REGS; g = g + 1) begin : phys_bus_pack
             assign phys_ready_bus[g] = phys_ready[g];
             assign phys_value_bus[(g * 64) +: 64] = phys_value[g];
+            assign sched_ready_bus[g] = phys_ready[g] ||
+                (cdb0_en && (cdb0_tag == g[6:0])) ||
+                (cdb1_en && (cdb1_tag == g[6:0])) ||
+                (cdb2_en && (cdb2_tag == g[6:0])) ||
+                (cdb3_en && (cdb3_tag == g[6:0])) ||
+                (cdb4_en && (cdb4_tag == g[6:0])) ||
+                (cdb5_en && (cdb5_tag == g[6:0]));
+            assign sched_value_bus[(g * 64) +: 64] =
+                (cdb0_en && (cdb0_tag == g[6:0])) ? cdb0_val :
+                (cdb1_en && (cdb1_tag == g[6:0])) ? cdb1_val :
+                (cdb2_en && (cdb2_tag == g[6:0])) ? cdb2_val :
+                (cdb3_en && (cdb3_tag == g[6:0])) ? cdb3_val :
+                (cdb4_en && (cdb4_tag == g[6:0])) ? cdb4_val :
+                (cdb5_en && (cdb5_tag == g[6:0])) ? cdb5_val :
+                phys_value[g];
         end
         for (g = 0; g < 5; g = g + 1) begin : fpu_debug_pack
             assign fpu_pipe_valid[g] = fpu0_valid[g];
@@ -742,8 +811,8 @@ module tinker_core (
     alu_reservation_station alu_rs (
         .clk(~clk),
         .reset(reset),
-        .live_ready(phys_ready_bus),
-        .live_values(phys_value_bus),
+        .live_ready(sched_ready_bus),
+        .live_values(sched_value_bus),
         .dispatch0_valid(alu_dispatch0_valid),
         .dispatch0_op(alu_dispatch0_op),
         .dispatch0_rob(alu_dispatch0_rob),
@@ -815,8 +884,8 @@ module tinker_core (
     fpu_reservation_station fpu_rs (
         .clk(~clk),
         .reset(reset),
-        .live_ready(phys_ready_bus),
-        .live_values(phys_value_bus),
+        .live_ready(sched_ready_bus),
+        .live_values(sched_value_bus),
         .dispatch0_valid(fpu_dispatch0_valid),
         .dispatch0_op(fpu_dispatch0_op),
         .dispatch0_rob(fpu_dispatch0_rob),
@@ -870,8 +939,8 @@ module tinker_core (
     load_store_queue lsq (
         .clk(~clk),
         .reset(reset),
-        .live_ready(phys_ready_bus),
-        .live_values(phys_value_bus),
+        .live_ready(sched_ready_bus),
+        .live_values(sched_value_bus),
         .rob_head(rob_head[4:0]),
         .dispatch0_valid(lsq_dispatch0_valid),
         .dispatch0_rob(lsq_dispatch0_rob),
@@ -1271,14 +1340,15 @@ module tinker_core (
 
             if (rob_count > 0 && rob_valid[rob_head] &&
                 (rob_ready[rob_head] ||
+                 (head_stage_ready_now && !has_commit_mem_side_effect(rob_op[rob_head])) ||
                  ((rob_op[rob_head] == OP_MOV_SM) && lsq_store_ready_bus[rob_head]) ||
                  ((rob_op[rob_head] == OP_CALL) && rob_branch_done[rob_head] && lsq_store_ready_bus[rob_head]))) begin
                 j = rob_head;
 
-                if (rob_has_dest[j]) begin
+                if (rob_has_dest[j] && (rob_ready[j] || head_stage_has_dest_now)) begin
                     arch_write_enable = 1'b1;
                     arch_write_rd = rob_arch_dest[j];
-                    arch_write_data = rob_value[j];
+                    arch_write_data = head_stage_ready_now ? head_stage_value_now : rob_value[j];
                 end
 
                 if ((rob_op[j] == OP_MOV_SM) || (rob_op[j] == OP_CALL)) begin
@@ -1309,15 +1379,16 @@ module tinker_core (
                     hlt = 1'b1;
                 end else if ((rob_count > 0) && rob_valid[rob_head] &&
                     (rob_ready[rob_head] ||
+                     (second_stage_ready_now && !has_commit_mem_side_effect(rob_op[rob_head])) ||
                      ((rob_op[rob_head] == OP_MOV_SM) && lsq_store_ready_bus[rob_head]) ||
                      ((rob_op[rob_head] == OP_CALL) && rob_branch_done[rob_head] && lsq_store_ready_bus[rob_head])) &&
                     (rob_op[rob_head] != OP_PRIV) &&
                     (!has_commit_mem_side_effect(rob_op[j]) || !has_commit_mem_side_effect(rob_op[rob_head]))) begin
                     k = rob_head;
-                    if (rob_has_dest[k]) begin
+                    if (rob_has_dest[k] && (rob_ready[k] || second_stage_has_dest_now)) begin
                         arch_write_enable2 = 1'b1;
                         arch_write_rd2 = rob_arch_dest[k];
-                        arch_write_data2 = rob_value[k];
+                        arch_write_data2 = second_stage_ready_now ? second_stage_value_now : rob_value[k];
                     end
                     if (has_commit_mem_side_effect(rob_op[k])) begin
                         commit_mem_write = 1'b1;
