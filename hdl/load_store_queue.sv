@@ -102,6 +102,8 @@ module load_store_queue (
     integer issue1_idx;
     integer dc;
     integer du;
+    integer step;
+    integer s;
     reg can_issue;
     reg forward_found;
     reg [63:0] forward_value;
@@ -200,19 +202,27 @@ module load_store_queue (
         issue_forward_data0 = 64'b0;
         issue_forward_data1 = 64'b0;
 
-        for (i = 0; i < SIZE; i = i + 1) begin
+        for (step = 0; step < SIZE; step = step + 1) begin
+            i = rob_head + step;
+            if (i >= SIZE) i = i - SIZE;
             if (valid[i] && !issued[i] && ((op[i] == `OP_MOV_ML) || (op[i] == `OP_RET)) && live_src_ready(addr_ready[i], addr_tag[i])) begin
                 can_issue = 1;
                 forward_found = 0;
                 forward_value = 64'b0;
-                for (k = 0; k < SIZE; k = k + 1) begin
+                for (s = 1; s < SIZE; s = s + 1) begin
+                    k = i - s;
+                    if (k < 0) k = k + SIZE;
                     if (valid[k] && ((op[k] == `OP_MOV_SM) || (op[k] == `OP_CALL)) && older_than(k, i)) begin
-                        unknown_alias = !live_src_ready(addr_ready[k], addr_tag[k]);
-                        if (!unknown_alias && (effective_addr(k) == effective_addr(i))) begin
-                            if (!live_src_ready(data_ready[k], data_tag[k])) can_issue = 0;
-                            else begin
-                                forward_found = 1;
-                                forward_value = live_src_value(data_ready[k], data_val[k], data_tag[k]);
+                        if (!forward_found && can_issue) begin
+                            unknown_alias = !live_src_ready(addr_ready[k], addr_tag[k]);
+                            if (unknown_alias) begin
+                                can_issue = 0;
+                            end else if (effective_addr(k) == effective_addr(i)) begin
+                                if (!live_src_ready(data_ready[k], data_tag[k])) can_issue = 0;
+                                else begin
+                                    forward_found = 1;
+                                    forward_value = live_src_value(data_ready[k], data_val[k], data_tag[k]);
+                                end
                             end
                         end
                     end
