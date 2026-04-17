@@ -8,6 +8,13 @@ module memory (
 );
     parameter MEM_SIZE = 524288;
     reg [7:0] bytes [0:MEM_SIZE - 1];
+    integer i;
+
+    initial begin
+        for (i = 0; i < MEM_SIZE; i = i + 1) begin
+            bytes[i] = 8'b0;
+        end
+    end
 
     assign read_data = mem_read ? {
         bytes[addr + 7], bytes[addr + 6], bytes[addr + 5], bytes[addr + 4],

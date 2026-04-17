@@ -41,6 +41,9 @@ module fpu_reservation_station (
     input cdb5_en,
     input [5:0] cdb5_tag,
     input [63:0] cdb5_val,
+    input flush_en,
+    input [4:0] flush_rob,
+    input [4:0] flush_tail,
     input issue_take0,
     input [2:0] issue_take_idx0,
     input issue_take1,
@@ -77,6 +80,8 @@ module fpu_reservation_station (
     integer free1_idx;
     integer issue0_idx;
     integer issue1_idx;
+    integer dc;
+    integer du;
 
     function [63:0] live_src_value;
         input in_ready;
@@ -103,6 +108,17 @@ module fpu_reservation_station (
             end
         end
     endtask
+
+    function younger_than_flush;
+        input [4:0] rob_idx;
+        begin
+            dc = rob_idx - flush_rob;
+            du = flush_tail - flush_rob;
+            if (dc < 0) dc = dc + 16;
+            if (du < 0) du = du + 16;
+            younger_than_flush = (dc > 0) && (dc < du);
+        end
+    endfunction
 
     always @(*) begin
         free_count = 0;
@@ -154,6 +170,13 @@ module fpu_reservation_station (
                 s1_val[i] <= 64'b0;
             end
         end else begin
+            if (flush_en) begin
+                for (i = 0; i < SIZE; i = i + 1) begin
+                    if (valid[i] && younger_than_flush(rob[i])) begin
+                        valid[i] <= 1'b0;
+                    end
+                end
+            end
             if (issue_take0) valid[issue_take_idx0] <= 1'b0;
             if (issue_take1) valid[issue_take_idx1] <= 1'b0;
 

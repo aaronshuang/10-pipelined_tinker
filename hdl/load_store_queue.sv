@@ -50,6 +50,9 @@ module load_store_queue (
     input cdb5_en,
     input [5:0] cdb5_tag,
     input [63:0] cdb5_val,
+    input flush_en,
+    input [4:0] flush_rob,
+    input [4:0] flush_tail,
     input clear_en,
     input [4:0] clear_idx,
     input issue_take0,
@@ -143,6 +146,17 @@ module load_store_queue (
             if (dc < 0) dc = dc + SIZE;
             if (du < 0) du = du + SIZE;
             older_than = (dc < du);
+        end
+    endfunction
+
+    function younger_than_flush;
+        input integer rob_idx;
+        begin
+            dc = rob_idx - flush_rob;
+            du = flush_tail - flush_rob;
+            if (dc < 0) dc = dc + SIZE;
+            if (du < 0) du = du + SIZE;
+            younger_than_flush = (dc > 0) && (dc < du);
         end
     endfunction
 
@@ -244,6 +258,14 @@ module load_store_queue (
                 pc[i] <= 64'b0;
             end
         end else begin
+            if (flush_en) begin
+                for (i = 0; i < SIZE; i = i + 1) begin
+                    if (valid[i] && younger_than_flush(i)) begin
+                        valid[i] <= 1'b0;
+                        issued[i] <= 1'b0;
+                    end
+                end
+            end
             if (clear_en) begin
                 valid[clear_idx] <= 1'b0;
                 issued[clear_idx] <= 1'b0;

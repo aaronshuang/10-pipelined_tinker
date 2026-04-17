@@ -175,9 +175,18 @@ module tinker_core (
     reg [63:0] rob_value [0:ROB_SIZE - 1];
     reg [63:0] rob_target [0:ROB_SIZE - 1];
     reg rob_taken [0:ROB_SIZE - 1];
+    reg rob_pred_taken [0:ROB_SIZE - 1];
+    reg [63:0] rob_pred_target [0:ROB_SIZE - 1];
     integer rob_head;
     integer rob_tail;
     integer rob_count;
+    reg speculative_valid;
+    reg [4:0] speculative_rob;
+    reg [5:0] checkpoint_rat [0:31];
+    integer checkpoint_ret_sp;
+    reg flush_en;
+    reg [4:0] flush_rob;
+    reg [4:0] flush_tail;
 
     reg alu_dispatch0_valid;
     reg [4:0] alu_dispatch0_op;
@@ -445,6 +454,9 @@ module tinker_core (
     reg arch_write_enable;
     reg [4:0] arch_write_rd;
     reg [63:0] arch_write_data;
+    reg arch_write_enable2;
+    reg [4:0] arch_write_rd2;
+    reg [63:0] arch_write_data2;
     reg commit_mem_write;
     reg [63:0] commit_mem_addr;
     reg [63:0] commit_mem_data;
@@ -497,6 +509,18 @@ module tinker_core (
     wire [4:0] fpu2_pipe_opcode [0:4];
     reg decode_valid_dbg;
     reg [31:0] ir_dbg;
+    reg branch_start_spec;
+    reg [4:0] branch_spec_rob;
+    reg branch_spec_taken;
+    reg [63:0] branch_spec_target;
+    reg branch_fast_resolve0;
+    reg branch_fast_taken0;
+    reg [63:0] branch_fast_target0;
+    reg branch_fast_resolve1;
+    reg branch_fast_taken1;
+    reg [63:0] branch_fast_target1;
+    integer flush_count;
+    integer tail_snapshot;
 
     assign pc = fetch_pc;
     assign decode_valid = decode_valid_dbg;
@@ -515,6 +539,9 @@ module tinker_core (
         .rs(5'd0),
         .rt(5'd0),
         .write_enable(arch_write_enable),
+        .data2(arch_write_data2),
+        .rd2(arch_write_rd2),
+        .write_enable2(arch_write_enable2),
         .rd_val(arch_rd_val),
         .rs_val(arch_rs_val),
         .rt_val(arch_rt_val),
@@ -632,6 +659,9 @@ module tinker_core (
         .cdb3_en(cdb3_en), .cdb3_tag(cdb3_tag), .cdb3_val(cdb3_val),
         .cdb4_en(cdb4_en), .cdb4_tag(cdb4_tag), .cdb4_val(cdb4_val),
         .cdb5_en(cdb5_en), .cdb5_tag(cdb5_tag), .cdb5_val(cdb5_val),
+        .flush_en(flush_en),
+        .flush_rob(flush_rob),
+        .flush_tail(flush_tail),
         .issue_take0(alu_issue_valid0),
         .issue_take1(alu_issue_valid1),
         .free_count(alu_rs_free_count),
@@ -690,6 +720,9 @@ module tinker_core (
         .cdb3_en(cdb3_en), .cdb3_tag(cdb3_tag), .cdb3_val(cdb3_val),
         .cdb4_en(cdb4_en), .cdb4_tag(cdb4_tag), .cdb4_val(cdb4_val),
         .cdb5_en(cdb5_en), .cdb5_tag(cdb5_tag), .cdb5_val(cdb5_val),
+        .flush_en(flush_en),
+        .flush_rob(flush_rob),
+        .flush_tail(flush_tail),
         .issue_take0(fpu_issue_take0),
         .issue_take_idx0(fpu_issue_take_idx0),
         .issue_take1(fpu_issue_take1),
@@ -749,6 +782,9 @@ module tinker_core (
         .cdb3_en(cdb3_en), .cdb3_tag(cdb3_tag), .cdb3_val(cdb3_val),
         .cdb4_en(cdb4_en), .cdb4_tag(cdb4_tag), .cdb4_val(cdb4_val),
         .cdb5_en(cdb5_en), .cdb5_tag(cdb5_tag), .cdb5_val(cdb5_val),
+        .flush_en(flush_en),
+        .flush_rob(flush_rob),
+        .flush_tail(flush_tail),
         .clear_en(lsq_clear_en),
         .clear_idx(lsq_clear_idx),
         .issue_take0(lsq_issue_valid0),
@@ -786,6 +822,125 @@ module tinker_core (
         end
     endtask
 
+    task squash_younger;
+        input [4:0] branch_rob;
+        input [63:0] restart_pc;
+        begin
+            flush_en = 1'b1;
+            flush_rob = branch_rob;
+            flush_tail = rob_tail[4:0];
+            tail_snapshot = rob_tail;
+            flush_count = 0;
+
+            for (i = 0; i < ROB_SIZE; i = i + 1) begin
+                if (rob_valid[i]) begin
+                    j = i - branch_rob;
+                    k = tail_snapshot - branch_rob;
+                    if (j < 0) j = j + ROB_SIZE;
+                    if (k < 0) k = k + ROB_SIZE;
+                    if ((j > 0) && (j < k)) begin
+                        if (rob_has_dest[i] && (rob_phys_dest[i] >= 32)) begin
+                            free_list[free_tail] = rob_phys_dest[i];
+                            free_tail = (free_tail + 1) % FREE_REGS;
+                            free_count = free_count + 1;
+                        end
+                        rob_valid[i] = 1'b0;
+                        rob_ready[i] = 1'b0;
+                        rob_branch_done[i] = 1'b0;
+                        rob_store_done[i] = 1'b0;
+                        rob_has_dest[i] = 1'b0;
+                        flush_count = flush_count + 1;
+                    end
+                end
+            end
+
+            for (i = 0; i < 32; i = i + 1) begin
+                rat[i] = checkpoint_rat[i];
+            end
+            ret_sp = checkpoint_ret_sp;
+
+            if (alu0_s0_valid) begin
+                j = alu0_s0_rob - branch_rob;
+                k = tail_snapshot - branch_rob;
+                if (j < 0) j = j + ROB_SIZE;
+                if (k < 0) k = k + ROB_SIZE;
+                if ((j > 0) && (j < k)) alu0_s0_valid = 1'b0;
+            end
+            if (alu0_s1_valid) begin
+                j = alu0_s1_rob - branch_rob;
+                k = tail_snapshot - branch_rob;
+                if (j < 0) j = j + ROB_SIZE;
+                if (k < 0) k = k + ROB_SIZE;
+                if ((j > 0) && (j < k)) alu0_s1_valid = 1'b0;
+            end
+            if (alu1_s0_valid) begin
+                j = alu1_s0_rob - branch_rob;
+                k = tail_snapshot - branch_rob;
+                if (j < 0) j = j + ROB_SIZE;
+                if (k < 0) k = k + ROB_SIZE;
+                if ((j > 0) && (j < k)) alu1_s0_valid = 1'b0;
+            end
+            if (alu1_s1_valid) begin
+                j = alu1_s1_rob - branch_rob;
+                k = tail_snapshot - branch_rob;
+                if (j < 0) j = j + ROB_SIZE;
+                if (k < 0) k = k + ROB_SIZE;
+                if ((j > 0) && (j < k)) alu1_s1_valid = 1'b0;
+            end
+            if (ls0_s0_valid) begin
+                j = ls0_s0_rob - branch_rob;
+                k = tail_snapshot - branch_rob;
+                if (j < 0) j = j + ROB_SIZE;
+                if (k < 0) k = k + ROB_SIZE;
+                if ((j > 0) && (j < k)) ls0_s0_valid = 1'b0;
+            end
+            if (ls0_s1_valid) begin
+                j = ls0_s1_rob - branch_rob;
+                k = tail_snapshot - branch_rob;
+                if (j < 0) j = j + ROB_SIZE;
+                if (k < 0) k = k + ROB_SIZE;
+                if ((j > 0) && (j < k)) ls0_s1_valid = 1'b0;
+            end
+            if (ls1_s0_valid) begin
+                j = ls1_s0_rob - branch_rob;
+                k = tail_snapshot - branch_rob;
+                if (j < 0) j = j + ROB_SIZE;
+                if (k < 0) k = k + ROB_SIZE;
+                if ((j > 0) && (j < k)) ls1_s0_valid = 1'b0;
+            end
+            if (ls1_s1_valid) begin
+                j = ls1_s1_rob - branch_rob;
+                k = tail_snapshot - branch_rob;
+                if (j < 0) j = j + ROB_SIZE;
+                if (k < 0) k = k + ROB_SIZE;
+                if ((j > 0) && (j < k)) ls1_s1_valid = 1'b0;
+            end
+            for (i = 0; i < 5; i = i + 1) begin
+                if (fpu0_valid[i]) begin
+                    j = fpu0_rob[i] - branch_rob;
+                    k = tail_snapshot - branch_rob;
+                    if (j < 0) j = j + ROB_SIZE;
+                    if (k < 0) k = k + ROB_SIZE;
+                    if ((j > 0) && (j < k)) fpu0_valid[i] = 1'b0;
+                end
+                if (fpu1_valid[i]) begin
+                    j = fpu1_rob[i] - branch_rob;
+                    k = tail_snapshot - branch_rob;
+                    if (j < 0) j = j + ROB_SIZE;
+                    if (k < 0) k = k + ROB_SIZE;
+                    if ((j > 0) && (j < k)) fpu1_valid[i] = 1'b0;
+                end
+            end
+
+            rob_tail = (branch_rob + 1) % ROB_SIZE;
+            rob_count = rob_count - flush_count;
+            speculative_valid = 1'b0;
+            fetch_pc = restart_pc;
+            fetch_line_valid = 1'b0;
+            control_stall = 1'b0;
+        end
+    endtask
+
     task resolve_branch;
         input [4:0] rob_idx_in;
         input taken_in;
@@ -802,9 +957,15 @@ module tinker_core (
             end
 
             control_stall = 1'b0;
-            if (taken_in) begin
+            if (speculative_valid && (speculative_rob == rob_idx_in)) begin
+                speculative_valid = 1'b0;
+                if ((rob_pred_taken[rob_idx_in] != taken_in) ||
+                    (taken_in && (rob_pred_target[rob_idx_in] != target_in))) begin
+                    squash_younger(rob_idx_in, taken_in ? target_in : (pc_in + 4));
+                end
+            end else if (taken_in) begin
                 fetch_pc = target_in;
-                fetch_line_valid = 1'b0;
+                if (fetch_line_base[63:6] != target_in[63:6]) fetch_line_valid = 1'b0;
             end
 
             bp_update_en = 1'b1;
@@ -825,6 +986,9 @@ module tinker_core (
             arch_write_enable = 1'b0;
             arch_write_rd = 5'b0;
             arch_write_data = 64'b0;
+            arch_write_enable2 = 1'b0;
+            arch_write_rd2 = 5'b0;
+            arch_write_data2 = 64'b0;
             commit_mem_write = 1'b0;
             commit_mem_addr = 64'b0;
             commit_mem_data = 64'b0;
@@ -838,6 +1002,12 @@ module tinker_core (
             rob_head = 0;
             rob_tail = 0;
             rob_count = 0;
+            speculative_valid = 1'b0;
+            speculative_rob = 5'b0;
+            flush_en = 1'b0;
+            flush_rob = 5'b0;
+            flush_tail = 5'b0;
+            checkpoint_ret_sp = 0;
 
             free_head = 0;
             free_tail = 0;
@@ -871,6 +1041,8 @@ module tinker_core (
                 rob_value[i] = 64'b0;
                 rob_target[i] = 64'b0;
                 rob_taken[i] = 1'b0;
+                rob_pred_taken[i] = 1'b0;
+                rob_pred_target[i] = 64'b0;
             end
 
             alu_dispatch0_valid = 1'b0;
@@ -915,6 +1087,11 @@ module tinker_core (
             decode_valid_dbg = alu_dispatch0_valid || fpu_dispatch0_valid || lsq_dispatch0_valid;
             ir_dbg = inst0;
             arch_write_enable = 1'b0;
+            arch_write_rd = 5'b0;
+            arch_write_data = 64'b0;
+            arch_write_enable2 = 1'b0;
+            arch_write_rd2 = 5'b0;
+            arch_write_data2 = 64'b0;
             commit_mem_write = 1'b0;
             bp_update_en = 1'b0;
             alu_dispatch0_valid = 1'b0;
@@ -930,6 +1107,19 @@ module tinker_core (
             lsq_clear_en = 1'b0;
             lsq_clear_idx = rob_head[4:0];
             lsq_commit_idx = rob_head[4:0];
+            flush_en = 1'b0;
+            flush_rob = 5'b0;
+            flush_tail = 5'b0;
+            branch_start_spec = 1'b0;
+            branch_spec_rob = 5'b0;
+            branch_spec_taken = 1'b0;
+            branch_spec_target = 64'b0;
+            branch_fast_resolve0 = 1'b0;
+            branch_fast_taken0 = 1'b0;
+            branch_fast_target0 = 64'b0;
+            branch_fast_resolve1 = 1'b0;
+            branch_fast_taken1 = 1'b0;
+            branch_fast_target1 = 64'b0;
 
             // Keep the architectural register seed state visible through the
             // base physical mappings until a register is renamed away.
@@ -941,37 +1131,58 @@ module tinker_core (
             end
 
             if (rob_count > 0 && rob_valid[rob_head] && rob_ready[rob_head]) begin
-                if (rob_has_dest[rob_head]) begin
+                j = rob_head;
+
+                if (rob_has_dest[j]) begin
                     arch_write_enable = 1'b1;
-                    arch_write_rd = rob_arch_dest[rob_head];
-                    arch_write_data = rob_value[rob_head];
+                    arch_write_rd = rob_arch_dest[j];
+                    arch_write_data = rob_value[j];
                 end
 
-                if ((rob_op[rob_head] == OP_MOV_SM) || (rob_op[rob_head] == OP_CALL)) begin
+                if ((rob_op[j] == OP_MOV_SM) || (rob_op[j] == OP_CALL)) begin
                     commit_mem_write = 1'b1;
-                    commit_mem_addr = lsq_commit_addr;
-                    commit_mem_data = lsq_commit_data;
+                    commit_mem_addr =
+                        (lsq.addr_ready[j] ? lsq.addr_val[j] : phys_value[lsq.addr_tag[j]]) +
+                        ((rob_op[j] == OP_CALL) ? 64'hfffffffffffffff8 : signext12(lsq.imm[j]));
+                    commit_mem_data = lsq.data_ready[j] ? lsq.data_val[j] : phys_value[lsq.data_tag[j]];
                 end
 
-                lsq_clear_en = 1'b1;
-                lsq_clear_idx = rob_head[4:0];
+                if (uses_lsq(rob_op[j])) begin
+                    lsq_clear_en = 1'b1;
+                    lsq_clear_idx = j[4:0];
+                end
 
-                if (rob_has_dest[rob_head]) begin
-                    if (rob_old_phys[rob_head] >= 32) begin
-                        free_list[free_tail] = rob_old_phys[rob_head];
+                if (rob_has_dest[j] && (rob_old_phys[j] >= 32)) begin
+                    free_list[free_tail] = rob_old_phys[j];
+                    free_tail = (free_tail + 1) % FREE_REGS;
+                    free_count = free_count + 1;
+                end
+
+                rob_valid[j] = 1'b0;
+                rob_ready[j] = 1'b0;
+                rob_head = (rob_head + 1) % ROB_SIZE;
+                rob_count = rob_count - 1;
+
+                if (rob_op[j] == OP_PRIV) begin
+                    hlt = 1'b1;
+                end else if ((rob_count > 0) && rob_valid[rob_head] && rob_ready[rob_head] &&
+                    !uses_lsq(rob_op[rob_head]) && (rob_op[rob_head] != OP_PRIV)) begin
+                    k = rob_head;
+                    if (rob_has_dest[k]) begin
+                        arch_write_enable2 = 1'b1;
+                        arch_write_rd2 = rob_arch_dest[k];
+                        arch_write_data2 = rob_value[k];
+                    end
+                    if (rob_has_dest[k] && (rob_old_phys[k] >= 32)) begin
+                        free_list[free_tail] = rob_old_phys[k];
                         free_tail = (free_tail + 1) % FREE_REGS;
                         free_count = free_count + 1;
                     end
+                    rob_valid[k] = 1'b0;
+                    rob_ready[k] = 1'b0;
+                    rob_head = (rob_head + 1) % ROB_SIZE;
+                    rob_count = rob_count - 1;
                 end
-
-                if (rob_op[rob_head] == OP_PRIV) begin
-                    hlt = 1'b1;
-                end
-
-                rob_valid[rob_head] = 1'b0;
-                rob_ready[rob_head] = 1'b0;
-                rob_head = (rob_head + 1) % ROB_SIZE;
-                rob_count = rob_count - 1;
             end
 
             if (alu0_s1_valid) begin
@@ -1283,7 +1494,9 @@ module tinker_core (
                     imm0 = inst0[11:0];
                     pc0 = fetch_pc;
 
-                    if (rob_count < ROB_SIZE) begin
+                    if (is_control_op(op0) && speculative_valid) begin
+                        control_stall = 1'b1;
+                    end else if (rob_count < ROB_SIZE) begin
                         free_rs_slots = alu_rs_free_count;
                         free_fp_slots = fpu_rs_free_count;
 
@@ -1302,6 +1515,8 @@ module tinker_core (
                             rob_value[entry_idx] = 64'b0;
                             rob_target[entry_idx] = 64'b0;
                             rob_taken[entry_idx] = 1'b0;
+                            rob_pred_taken[entry_idx] = 1'b0;
+                            rob_pred_target[entry_idx] = pc0 + 4;
 
                             if (writes_dest(op0)) begin
                                 new_phys = free_list[free_head];
@@ -1330,7 +1545,27 @@ module tinker_core (
                                 alu_dispatch0_s2_ready = 1'b0;
 
                                 case (op0)
-                                    OP_ADDI, OP_SUBI, OP_SHFTRI, OP_SHFTLI, OP_MOV_L: begin
+                                    OP_ADDI, OP_SUBI: begin
+                                        if (rs0 != 0) begin
+                                            map_src = (writes_dest(op0) && (rs0 == rd0)) ? rob_old_phys[entry_idx] : rat[rs0];
+                                        end else begin
+                                            map_src = rob_has_dest[entry_idx] ? rob_old_phys[entry_idx] : rat[rd0];
+                                        end
+                                        alu_dispatch0_s0_tag = map_src;
+                                        alu_dispatch0_s0_ready = phys_ready[map_src];
+                                        alu_dispatch0_s0_val = phys_value[map_src];
+                                        alu_dispatch0_s1_ready = 1'b1;
+                                        alu_dispatch0_s1_val = imm_operand(op0, imm0);
+                                    end
+                                    OP_SHFTRI, OP_SHFTLI: begin
+                                        map_src = rob_has_dest[entry_idx] ? rob_old_phys[entry_idx] : rat[rd0];
+                                        alu_dispatch0_s0_tag = map_src;
+                                        alu_dispatch0_s0_ready = phys_ready[map_src];
+                                        alu_dispatch0_s0_val = phys_value[map_src];
+                                        alu_dispatch0_s1_ready = 1'b1;
+                                        alu_dispatch0_s1_val = imm_operand(op0, imm0);
+                                    end
+                                    OP_MOV_L: begin
                                         map_src = rob_has_dest[entry_idx] ? rob_old_phys[entry_idx] : rat[rd0];
                                         alu_dispatch0_s0_tag = map_src;
                                         alu_dispatch0_s0_ready = phys_ready[map_src];
@@ -1339,7 +1574,7 @@ module tinker_core (
                                         alu_dispatch0_s1_val = imm_operand(op0, imm0);
                                     end
                                     OP_MOV_RR, OP_NOT: begin
-                                        map_src = rat[rs0];
+                                        map_src = (writes_dest(op0) && (rs0 == rd0)) ? rob_old_phys[entry_idx] : rat[rs0];
                                         alu_dispatch0_s0_tag = map_src;
                                         alu_dispatch0_s0_ready = phys_ready[map_src];
                                         alu_dispatch0_s0_val = phys_value[map_src];
@@ -1393,7 +1628,7 @@ module tinker_core (
                                         alu_dispatch0_s0_val = phys_value[map_src];
                                     end
                                     default: begin
-                                        map_src = rat[rs0];
+                                        map_src = (writes_dest(op0) && (rs0 == rd0)) ? rob_old_phys[entry_idx] : rat[rs0];
                                         alu_dispatch0_s0_tag = map_src;
                                         alu_dispatch0_s0_ready = phys_ready[map_src];
                                         alu_dispatch0_s0_val = phys_value[map_src];
@@ -1401,17 +1636,50 @@ module tinker_core (
                                             alu_dispatch0_s1_ready = 1'b1;
                                             alu_dispatch0_s1_val = 64'b0;
                                         end else begin
-                                            map_src = rat[rt0];
+                                            map_src = (writes_dest(op0) && (rt0 == rd0)) ? rob_old_phys[entry_idx] : rat[rt0];
                                             alu_dispatch0_s1_tag = map_src;
                                             alu_dispatch0_s1_ready = phys_ready[map_src];
                                             alu_dispatch0_s1_val = phys_value[map_src];
                                         end
                                     end
                                 endcase
+                                if ((op0 == OP_BR) && alu_dispatch0_s0_ready) begin
+                                    branch_fast_resolve0 = 1'b1;
+                                    branch_fast_taken0 = 1'b1;
+                                    branch_fast_target0 = alu_dispatch0_s0_val;
+                                end else if ((op0 == OP_BRR_R) && alu_dispatch0_s0_ready) begin
+                                    branch_fast_resolve0 = 1'b1;
+                                    branch_fast_taken0 = 1'b1;
+                                    branch_fast_target0 = pc0 + alu_dispatch0_s0_val;
+                                end else if (op0 == OP_BRR_L) begin
+                                    branch_fast_resolve0 = 1'b1;
+                                    branch_fast_taken0 = 1'b1;
+                                    branch_fast_target0 = pc0 + signext12(imm0);
+                                end else if ((op0 == OP_BRNZ) && alu_dispatch0_s0_ready && alu_dispatch0_s1_ready) begin
+                                    branch_fast_resolve0 = 1'b1;
+                                    branch_fast_taken0 = (alu_dispatch0_s1_val != 0);
+                                    branch_fast_target0 = alu_dispatch0_s0_val;
+                                end else if ((op0 == OP_BRGT) && alu_dispatch0_s0_ready && alu_dispatch0_s1_ready && alu_dispatch0_s2_ready) begin
+                                    branch_fast_resolve0 = 1'b1;
+                                    branch_fast_taken0 = (alu_dispatch0_s1_val > alu_dispatch0_s2_val);
+                                    branch_fast_target0 = alu_dispatch0_s0_val;
+                                end
+                                if (branch_fast_resolve0) begin
+                                    alu_dispatch0_valid = 1'b0;
+                                    rob_branch_done[entry_idx] = 1'b1;
+                                    rob_taken[entry_idx] = branch_fast_taken0;
+                                    rob_target[entry_idx] = branch_fast_target0;
+                                    rob_ready[entry_idx] = 1'b1;
+                                    bp_update_en = 1'b1;
+                                    bp_update_pc = pc0;
+                                    bp_update_taken = branch_fast_taken0;
+                                    bp_update_target = branch_fast_target0;
+                                end else begin
                                 free_rs_slots = free_rs_slots - 1;
+                                end
                             end else if (is_fpu_op(op0)) begin
-                                map_src = rat[rs0];
-                                map_src1 = rat[rt0];
+                                map_src = (writes_dest(op0) && (rs0 == rd0)) ? rob_old_phys[entry_idx] : rat[rs0];
+                                map_src1 = (writes_dest(op0) && (rt0 == rd0)) ? rob_old_phys[entry_idx] : rat[rt0];
                                 fpu_dispatch0_valid = 1'b1;
                                 fpu_dispatch0_op = op0;
                                 fpu_dispatch0_rob = entry_idx[4:0];
@@ -1434,7 +1702,7 @@ module tinker_core (
                                 lsq_dispatch0_imm = imm0;
                                 lsq_dispatch0_pc = pc0;
                                 if (op0 == OP_MOV_ML) begin
-                                    map_src = rat[rs0];
+                                    map_src = (writes_dest(op0) && (rs0 == rd0)) ? rob_old_phys[entry_idx] : rat[rs0];
                                     lsq_dispatch0_addr_tag = map_src;
                                     lsq_dispatch0_addr_ready = phys_ready[map_src];
                                     lsq_dispatch0_addr_val = phys_value[map_src];
@@ -1468,10 +1736,63 @@ module tinker_core (
                                 ret_sp = ret_sp + 1;
                             end
 
+                            if (is_control_op(op0) && (op0 != OP_PRIV) && !speculative_valid && !branch_fast_resolve0) begin
+                                branch_start_spec = 1'b1;
+                                branch_spec_rob = entry_idx[4:0];
+                                branch_spec_taken = 1'b0;
+                                branch_spec_target = pc0 + 4;
+                                case (op0)
+                                    OP_BR: begin
+                                        branch_spec_taken = 1'b1;
+                                        branch_spec_target = alu_dispatch0_s0_ready ? alu_dispatch0_s0_val : bp_predict_target;
+                                    end
+                                    OP_BRR_R: begin
+                                        branch_spec_taken = 1'b1;
+                                        branch_spec_target = alu_dispatch0_s0_ready ? (pc0 + alu_dispatch0_s0_val) : bp_predict_target;
+                                    end
+                                    OP_BRR_L: begin
+                                        branch_spec_taken = 1'b1;
+                                        branch_spec_target = pc0 + signext12(imm0);
+                                    end
+                                    OP_BRNZ, OP_BRGT: begin
+                                        branch_spec_taken = bp_predict_taken;
+                                        branch_spec_target = bp_predict_taken ?
+                                            (alu_dispatch0_s0_ready ? alu_dispatch0_s0_val : bp_predict_target) : (pc0 + 4);
+                                    end
+                                    OP_CALL: begin
+                                        branch_spec_taken = 1'b1;
+                                        branch_spec_target = alu_dispatch0_s0_ready ? alu_dispatch0_s0_val : bp_predict_target;
+                                    end
+                                    OP_RET: begin
+                                        branch_spec_taken = 1'b1;
+                                        branch_spec_target = (ret_sp > 0) ? ret_stack[ret_sp - 1] : bp_predict_target;
+                                    end
+                                    default: begin
+                                    end
+                                endcase
+                                rob_pred_taken[entry_idx] = branch_spec_taken;
+                                rob_pred_target[entry_idx] = branch_spec_target;
+                                for (i = 0; i < 32; i = i + 1) begin
+                                    checkpoint_rat[i] = rat[i];
+                                end
+                                checkpoint_ret_sp = ret_sp;
+                                speculative_valid = 1'b1;
+                                speculative_rob = entry_idx[4:0];
+                            end
+
                             rob_tail = (rob_tail + 1) % ROB_SIZE;
                             rob_count = rob_count + 1;
-                            fetch_pc = fetch_pc + 4;
-                            if (is_control_op(op0)) control_stall = 1'b1;
+                            if (is_control_op(op0)) begin
+                                if (branch_fast_resolve0) begin
+                                    fetch_pc = branch_fast_taken0 ? branch_fast_target0 : (pc0 + 4);
+                                    if (branch_fast_taken0 && (fetch_line_base[63:6] != branch_fast_target0[63:6])) fetch_line_valid = 1'b0;
+                                end else begin
+                                    fetch_pc = branch_spec_taken ? branch_spec_target : (pc0 + 4);
+                                    if (branch_spec_taken && (fetch_line_base[63:6] != branch_spec_target[63:6])) fetch_line_valid = 1'b0;
+                                end
+                            end else begin
+                                fetch_pc = fetch_pc + 4;
+                            end
 
                             if (!control_stall && word_idx0 != 4'd15 && !is_control_op(op0) && (rob_count < ROB_SIZE)) begin
                                 inst1 = fetch_words[word_idx1];
@@ -1482,7 +1803,9 @@ module tinker_core (
                                 imm1 = inst1[11:0];
                                 pc1 = pc0 + 4;
 
-                                if ((!writes_dest(op1) || (free_count > 0)) &&
+                                if (is_control_op(op1) && speculative_valid) begin
+                                    control_stall = 1'b1;
+                                end else if ((!writes_dest(op1) || (free_count > 0)) &&
                                     (!uses_alu_rs(op1) || (free_rs_slots > 0)) &&
                                     (!is_fpu_op(op1) || (free_fp_slots > 0))) begin
                                     entry_idx = rob_tail;
@@ -1497,6 +1820,8 @@ module tinker_core (
                                     rob_value[entry_idx] = 64'b0;
                                     rob_target[entry_idx] = 64'b0;
                                     rob_taken[entry_idx] = 1'b0;
+                                    rob_pred_taken[entry_idx] = 1'b0;
+                                    rob_pred_target[entry_idx] = pc1 + 4;
 
                                     if (writes_dest(op1)) begin
                                         new_phys1 = free_list[free_head];
@@ -1526,7 +1851,28 @@ module tinker_core (
                                         alu_dispatch1_s2_ready = 1'b0;
 
                                         case (op1)
-                                            OP_ADDI, OP_SUBI, OP_SHFTRI, OP_SHFTLI, OP_MOV_L: begin
+                                            OP_ADDI, OP_SUBI: begin
+                                                if (rs1 != 0) begin
+                                                    map_src1 = (writes_dest(op1) && (rs1 == rd1)) ? rob_old_phys[entry_idx] :
+                                                        ((writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1]);
+                                                end else begin
+                                                    map_src1 = rob_old_phys[entry_idx];
+                                                end
+                                                alu_dispatch1_s0_tag = map_src1;
+                                                alu_dispatch1_s0_ready = phys_ready[map_src1];
+                                                alu_dispatch1_s0_val = phys_value[map_src1];
+                                                alu_dispatch1_s1_ready = 1'b1;
+                                                alu_dispatch1_s1_val = imm_operand(op1, imm1);
+                                            end
+                                            OP_SHFTRI, OP_SHFTLI: begin
+                                                map_src1 = rob_old_phys[entry_idx];
+                                                alu_dispatch1_s0_tag = map_src1;
+                                                alu_dispatch1_s0_ready = phys_ready[map_src1];
+                                                alu_dispatch1_s0_val = phys_value[map_src1];
+                                                alu_dispatch1_s1_ready = 1'b1;
+                                                alu_dispatch1_s1_val = imm_operand(op1, imm1);
+                                            end
+                                            OP_MOV_L: begin
                                                 map_src1 = rob_old_phys[entry_idx];
                                                 alu_dispatch1_s0_tag = map_src1;
                                                 alu_dispatch1_s0_ready = phys_ready[map_src1];
@@ -1535,7 +1881,8 @@ module tinker_core (
                                                 alu_dispatch1_s1_val = imm_operand(op1, imm1);
                                             end
                                             OP_MOV_RR, OP_NOT: begin
-                                                map_src1 = (writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1];
+                                                map_src1 = (writes_dest(op1) && (rs1 == rd1)) ? rob_old_phys[entry_idx] :
+                                                    ((writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1]);
                                                 alu_dispatch1_s0_tag = map_src1;
                                                 alu_dispatch1_s0_ready = phys_ready[map_src1];
                                                 alu_dispatch1_s0_val = phys_value[map_src1];
@@ -1577,20 +1924,57 @@ module tinker_core (
                                                 alu_dispatch1_s2_val = phys_value[map_src1];
                                             end
                                             default: begin
-                                                map_src1 = (writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1];
+                                                map_src1 = (writes_dest(op1) && (rs1 == rd1)) ? rob_old_phys[entry_idx] :
+                                                    ((writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1]);
                                                 alu_dispatch1_s0_tag = map_src1;
                                                 alu_dispatch1_s0_ready = phys_ready[map_src1];
                                                 alu_dispatch1_s0_val = phys_value[map_src1];
-                                                map_src1 = (writes_dest(op0) && (rt1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rt1];
+                                                map_src1 = (writes_dest(op1) && (rt1 == rd1)) ? rob_old_phys[entry_idx] :
+                                                    ((writes_dest(op0) && (rt1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rt1]);
                                                 alu_dispatch1_s1_tag = map_src1;
                                                 alu_dispatch1_s1_ready = phys_ready[map_src1];
                                                 alu_dispatch1_s1_val = phys_value[map_src1];
                                             end
                                         endcase
+                                        if ((op1 == OP_BR) && alu_dispatch1_s0_ready) begin
+                                            branch_fast_resolve1 = 1'b1;
+                                            branch_fast_taken1 = 1'b1;
+                                            branch_fast_target1 = alu_dispatch1_s0_val;
+                                        end else if ((op1 == OP_BRR_R) && alu_dispatch1_s0_ready) begin
+                                            branch_fast_resolve1 = 1'b1;
+                                            branch_fast_taken1 = 1'b1;
+                                            branch_fast_target1 = pc1 + alu_dispatch1_s0_val;
+                                        end else if (op1 == OP_BRR_L) begin
+                                            branch_fast_resolve1 = 1'b1;
+                                            branch_fast_taken1 = 1'b1;
+                                            branch_fast_target1 = pc1 + signext12(imm1);
+                                        end else if ((op1 == OP_BRNZ) && alu_dispatch1_s0_ready && alu_dispatch1_s1_ready) begin
+                                            branch_fast_resolve1 = 1'b1;
+                                            branch_fast_taken1 = (alu_dispatch1_s1_val != 0);
+                                            branch_fast_target1 = alu_dispatch1_s0_val;
+                                        end else if ((op1 == OP_BRGT) && alu_dispatch1_s0_ready && alu_dispatch1_s1_ready && alu_dispatch1_s2_ready) begin
+                                            branch_fast_resolve1 = 1'b1;
+                                            branch_fast_taken1 = (alu_dispatch1_s1_val > alu_dispatch1_s2_val);
+                                            branch_fast_target1 = alu_dispatch1_s0_val;
+                                        end
+                                        if (branch_fast_resolve1) begin
+                                            alu_dispatch1_valid = 1'b0;
+                                            rob_branch_done[entry_idx] = 1'b1;
+                                            rob_taken[entry_idx] = branch_fast_taken1;
+                                            rob_target[entry_idx] = branch_fast_target1;
+                                            rob_ready[entry_idx] = 1'b1;
+                                            bp_update_en = 1'b1;
+                                            bp_update_pc = pc1;
+                                            bp_update_taken = branch_fast_taken1;
+                                            bp_update_target = branch_fast_target1;
+                                        end else begin
                                         free_rs_slots = free_rs_slots - 1;
+                                        end
                                     end else if (is_fpu_op(op1)) begin
-                                        map_src1 = (writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1];
-                                        map_src = (writes_dest(op0) && (rt1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rt1];
+                                        map_src1 = (writes_dest(op1) && (rs1 == rd1)) ? rob_old_phys[entry_idx] :
+                                            ((writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1]);
+                                        map_src = (writes_dest(op1) && (rt1 == rd1)) ? rob_old_phys[entry_idx] :
+                                            ((writes_dest(op0) && (rt1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rt1]);
                                         fpu_dispatch1_valid = 1'b1;
                                         fpu_dispatch1_op = op1;
                                         fpu_dispatch1_rob = entry_idx[4:0];
@@ -1613,7 +1997,8 @@ module tinker_core (
                                         lsq_dispatch1_imm = imm1;
                                         lsq_dispatch1_pc = pc1;
                                         if (op1 == OP_MOV_ML) begin
-                                            map_src1 = (writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1];
+                                            map_src1 = (writes_dest(op1) && (rs1 == rd1)) ? rob_old_phys[entry_idx] :
+                                                ((writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1]);
                                             lsq_dispatch1_addr_tag = map_src1;
                                             lsq_dispatch1_addr_ready = phys_ready[map_src1];
                                             lsq_dispatch1_addr_val = phys_value[map_src1];
@@ -1647,10 +2032,62 @@ module tinker_core (
                                         ret_sp = ret_sp + 1;
                                     end
 
+                                    if (is_control_op(op1) && (op1 != OP_PRIV) && !speculative_valid && !branch_fast_resolve1) begin
+                                        branch_start_spec = 1'b1;
+                                        branch_spec_rob = entry_idx[4:0];
+                                        branch_spec_taken = 1'b0;
+                                        branch_spec_target = pc1 + 4;
+                                        case (op1)
+                                            OP_BR: begin
+                                                branch_spec_taken = 1'b1;
+                                                branch_spec_target = alu_dispatch1_s0_ready ? alu_dispatch1_s0_val : bp_predict_target;
+                                            end
+                                            OP_BRR_R: begin
+                                                branch_spec_taken = 1'b1;
+                                                branch_spec_target = alu_dispatch1_s0_ready ? (pc1 + alu_dispatch1_s0_val) : bp_predict_target;
+                                            end
+                                            OP_BRR_L: begin
+                                                branch_spec_taken = 1'b1;
+                                                branch_spec_target = pc1 + signext12(imm1);
+                                            end
+                                            OP_BRNZ, OP_BRGT: begin
+                                                branch_spec_taken = 1'b0;
+                                                branch_spec_target = pc1 + 4;
+                                            end
+                                            OP_CALL: begin
+                                                branch_spec_taken = 1'b1;
+                                                branch_spec_target = alu_dispatch1_s0_ready ? alu_dispatch1_s0_val : bp_predict_target;
+                                            end
+                                            OP_RET: begin
+                                                branch_spec_taken = 1'b1;
+                                                branch_spec_target = (ret_sp > 0) ? ret_stack[ret_sp - 1] : bp_predict_target;
+                                            end
+                                            default: begin
+                                            end
+                                        endcase
+                                        rob_pred_taken[entry_idx] = branch_spec_taken;
+                                        rob_pred_target[entry_idx] = branch_spec_target;
+                                        for (i = 0; i < 32; i = i + 1) begin
+                                            checkpoint_rat[i] = rat[i];
+                                        end
+                                        checkpoint_ret_sp = ret_sp;
+                                        speculative_valid = 1'b1;
+                                        speculative_rob = entry_idx[4:0];
+                                    end
+
                                     rob_tail = (rob_tail + 1) % ROB_SIZE;
                                     rob_count = rob_count + 1;
-                                    fetch_pc = fetch_pc + 4;
-                                    if (is_control_op(op1)) control_stall = 1'b1;
+                                    if (is_control_op(op1)) begin
+                                        if (branch_fast_resolve1) begin
+                                            fetch_pc = branch_fast_taken1 ? branch_fast_target1 : (pc1 + 4);
+                                            if (branch_fast_taken1 && (fetch_line_base[63:6] != branch_fast_target1[63:6])) fetch_line_valid = 1'b0;
+                                        end else begin
+                                            fetch_pc = branch_spec_taken ? branch_spec_target : (pc1 + 4);
+                                            if (branch_spec_taken && (fetch_line_base[63:6] != branch_spec_target[63:6])) fetch_line_valid = 1'b0;
+                                        end
+                                    end else begin
+                                        fetch_pc = fetch_pc + 4;
+                                    end;
                                 end
                             end
                         end

@@ -6,6 +6,9 @@ module register_file (
     input [4:0] rs,
     input [4:0] rt,
     input write_enable,
+    input [63:0] data2,
+    input [4:0] rd2,
+    input write_enable2,
     output [63:0] rd_val,
     output [63:0] rs_val,
     output [63:0] rt_val,
@@ -25,8 +28,13 @@ module register_file (
                 registers[i] <= 64'b0;
             end
             registers[31] <= 64'd524288;
-        end else if (write_enable) begin
-            registers[rd] <= data;
+        end else begin
+            if (write_enable) begin
+                registers[rd] <= data;
+            end
+            if (write_enable2) begin
+                registers[rd2] <= data2;
+            end
         end
     end
 endmodule
