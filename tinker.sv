@@ -113,6 +113,7 @@ module tinker_core (
         end
     endfunction
 
+
     function uses_alu_rs;
         input [4:0] op;
         begin
@@ -490,6 +491,10 @@ module tinker_core (
     wire [31:0] IR;
     reg int_rs_valid [0:7];
     reg [4:0] int_rs_opcode [0:7];
+    wire fpu_pipe_valid [0:4];
+    wire [4:0] fpu_pipe_opcode [0:4];
+    wire fpu2_pipe_valid [0:4];
+    wire [4:0] fpu2_pipe_opcode [0:4];
     reg decode_valid_dbg;
     reg [31:0] ir_dbg;
 
@@ -560,6 +565,12 @@ module tinker_core (
         for (g = 0; g < PHYS_REGS; g = g + 1) begin : phys_bus_pack
             assign phys_ready_bus[g] = phys_ready[g];
             assign phys_value_bus[(g * 64) +: 64] = phys_value[g];
+        end
+        for (g = 0; g < 5; g = g + 1) begin : fpu_debug_pack
+            assign fpu_pipe_valid[g] = fpu0_valid[g];
+            assign fpu_pipe_opcode[g] = fpu0_op[g];
+            assign fpu2_pipe_valid[g] = fpu1_valid[g];
+            assign fpu2_pipe_opcode[g] = fpu1_op[g];
         end
     endgenerate
 
