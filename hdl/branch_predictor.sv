@@ -4,6 +4,9 @@ module branch_predictor (
     input [63:0] lookup_pc,
     output reg predict_taken,
     output reg [63:0] predict_target,
+    input [63:0] lookup_pc2,
+    output reg predict_taken2,
+    output reg [63:0] predict_target2,
     input update_en,
     input [63:0] update_pc,
     input update_taken,
@@ -17,6 +20,7 @@ module branch_predictor (
     reg [63:0] targets [0:ENTRIES - 1];
     integer i;
     integer idx;
+    integer idx2;
     integer uidx;
 
     always @(*) begin
@@ -27,6 +31,15 @@ module branch_predictor (
         end else begin
             predict_taken = 1'b0;
             predict_target = lookup_pc + 4;
+        end
+
+        idx2 = lookup_pc2[7:2];
+        if (valid[idx2] && tags[idx2] == lookup_pc2[63:8]) begin
+            predict_taken2 = counter[idx2][1];
+            predict_target2 = counter[idx2][1] ? targets[idx2] : (lookup_pc2 + 4);
+        end else begin
+            predict_taken2 = 1'b0;
+            predict_target2 = lookup_pc2 + 4;
         end
     end
 

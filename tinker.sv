@@ -371,6 +371,8 @@ module tinker_core (
     wire [63:0] arch_r31_val;
     wire bp_predict_taken;
     wire [63:0] bp_predict_target;
+    wire bp_predict_taken1;
+    wire [63:0] bp_predict_target1;
     wire [63:0] phys_ready_bus;
     wire [4095:0] phys_value_bus;
     wire [3:0] alu_rs_free_count;
@@ -518,6 +520,14 @@ module tinker_core (
     wire [4:0] fpu2_pipe_opcode [0:4];
     reg decode_valid_dbg;
     reg [31:0] ir_dbg;
+    reg exec_valid;
+    reg [4:0] exec_opcode;
+    reg exec2_valid;
+    reg [4:0] exec2_opcode;
+    reg mem_valid;
+    reg [4:0] mem_opcode;
+    reg store_forward_hit;
+    integer exec_sel;
     reg branch_start_spec;
     reg [4:0] branch_spec_rob;
     reg branch_spec_taken;
@@ -535,6 +545,67 @@ module tinker_core (
     assign pc = fetch_pc;
     assign decode_valid = decode_valid_dbg;
     assign IR = ir_dbg;
+    always @(*) begin
+        exec_valid = 1'b0;
+        exec_opcode = 5'b0;
+        exec2_valid = 1'b0;
+        exec2_opcode = 5'b0;
+        exec_sel = 0;
+
+        if (ls0_s0_valid) begin
+            exec_valid = 1'b1;
+            exec_opcode = ls0_s0_op;
+            exec_sel = 1;
+        end else if (alu0_s0_valid) begin
+            exec_valid = 1'b1;
+            exec_opcode = alu0_s0_op;
+            exec_sel = 2;
+        end else if (fpu0_valid[0]) begin
+            exec_valid = 1'b1;
+            exec_opcode = fpu0_op[0];
+            exec_sel = 3;
+        end else if (ls1_s0_valid) begin
+            exec_valid = 1'b1;
+            exec_opcode = ls1_s0_op;
+            exec_sel = 4;
+        end else if (alu1_s0_valid) begin
+            exec_valid = 1'b1;
+            exec_opcode = alu1_s0_op;
+            exec_sel = 5;
+        end else if (fpu1_valid[0]) begin
+            exec_valid = 1'b1;
+            exec_opcode = fpu1_op[0];
+            exec_sel = 6;
+        end
+
+        if (exec_valid) begin
+            if ((exec_sel != 1) && ls0_s0_valid) begin
+                exec2_valid = 1'b1;
+                exec2_opcode = ls0_s0_op;
+            end else if ((exec_sel != 2) && alu0_s0_valid) begin
+                exec2_valid = 1'b1;
+                exec2_opcode = alu0_s0_op;
+            end else if ((exec_sel != 3) && fpu0_valid[0]) begin
+                exec2_valid = 1'b1;
+                exec2_opcode = fpu0_op[0];
+            end else if ((exec_sel != 4) && ls1_s0_valid) begin
+                exec2_valid = 1'b1;
+                exec2_opcode = ls1_s0_op;
+            end else if ((exec_sel != 5) && alu1_s0_valid) begin
+                exec2_valid = 1'b1;
+                exec2_opcode = alu1_s0_op;
+            end else if ((exec_sel != 6) && fpu1_valid[0]) begin
+                exec2_valid = 1'b1;
+                exec2_opcode = fpu1_op[0];
+            end
+        end
+
+        mem_valid = ls0_s1_valid || ls1_s1_valid;
+        mem_opcode = ls0_s1_valid ? rob_op[ls0_s1_rob] :
+            (ls1_s1_valid ? rob_op[ls1_s1_rob] : 5'b0);
+        store_forward_hit = (ls0_s1_valid && ls0_s0_forward_hit) ||
+            (ls1_s1_valid && ls1_s0_forward_hit);
+    end
 
     ALU alu0 (.a(alu0_s0_a), .b(alu0_s0_b), .op(alu0_s0_op), .res(alu0_comb_res));
     ALU alu1 (.a(alu1_s0_a), .b(alu1_s0_b), .op(alu1_s0_op), .res(alu1_comb_res));
@@ -573,6 +644,9 @@ module tinker_core (
         .lookup_pc(fetch_pc),
         .predict_taken(bp_predict_taken),
         .predict_target(bp_predict_target),
+        .lookup_pc2(fetch_pc + 64'd4),
+        .predict_taken2(bp_predict_taken1),
+        .predict_target2(bp_predict_target1),
         .update_en(bp_update_en),
         .update_pc(bp_update_pc),
         .update_taken(bp_update_taken),
@@ -1181,12 +1255,20 @@ module tinker_core (
                 if (rob_op[j] == OP_PRIV) begin
                     hlt = 1'b1;
                 end else if ((rob_count > 0) && rob_valid[rob_head] && rob_ready[rob_head] &&
-                    !has_commit_mem_side_effect(rob_op[rob_head]) && (rob_op[rob_head] != OP_PRIV)) begin
+                    (rob_op[rob_head] != OP_PRIV) &&
+                    (!has_commit_mem_side_effect(rob_op[j]) || !has_commit_mem_side_effect(rob_op[rob_head]))) begin
                     k = rob_head;
                     if (rob_has_dest[k]) begin
                         arch_write_enable2 = 1'b1;
                         arch_write_rd2 = rob_arch_dest[k];
                         arch_write_data2 = rob_value[k];
+                    end
+                    if (has_commit_mem_side_effect(rob_op[k])) begin
+                        commit_mem_write = 1'b1;
+                        commit_mem_addr =
+                            (lsq.addr_ready[k] ? lsq.addr_val[k] : phys_value[lsq.addr_tag[k]]) +
+                            ((rob_op[k] == OP_CALL) ? 64'hfffffffffffffff8 : signext12(lsq.imm[k]));
+                        commit_mem_data = lsq.data_ready[k] ? lsq.data_val[k] : phys_value[lsq.data_tag[k]];
                     end
                     if (uses_lsq(rob_op[k])) begin
                         lsq_clear_en2 = 1'b1;
@@ -2063,27 +2145,28 @@ module tinker_core (
                                         case (op1)
                                             OP_BR: begin
                                                 branch_spec_taken = 1'b1;
-                                                branch_spec_target = alu_dispatch1_s0_ready ? alu_dispatch1_s0_val : bp_predict_target;
+                                                branch_spec_target = alu_dispatch1_s0_ready ? alu_dispatch1_s0_val : bp_predict_target1;
                                             end
                                             OP_BRR_R: begin
                                                 branch_spec_taken = 1'b1;
-                                                branch_spec_target = alu_dispatch1_s0_ready ? (pc1 + alu_dispatch1_s0_val) : bp_predict_target;
+                                                branch_spec_target = alu_dispatch1_s0_ready ? (pc1 + alu_dispatch1_s0_val) : bp_predict_target1;
                                             end
                                             OP_BRR_L: begin
                                                 branch_spec_taken = 1'b1;
                                                 branch_spec_target = pc1 + signext12(imm1);
                                             end
                                             OP_BRNZ, OP_BRGT: begin
-                                                branch_spec_taken = 1'b0;
-                                                branch_spec_target = pc1 + 4;
+                                                branch_spec_taken = bp_predict_taken1;
+                                                branch_spec_target = bp_predict_taken1 ?
+                                                    (alu_dispatch1_s0_ready ? alu_dispatch1_s0_val : bp_predict_target1) : (pc1 + 4);
                                             end
                                             OP_CALL: begin
                                                 branch_spec_taken = 1'b1;
-                                                branch_spec_target = alu_dispatch1_s0_ready ? alu_dispatch1_s0_val : bp_predict_target;
+                                                branch_spec_target = alu_dispatch1_s0_ready ? alu_dispatch1_s0_val : bp_predict_target1;
                                             end
                                             OP_RET: begin
                                                 branch_spec_taken = 1'b1;
-                                                branch_spec_target = (ret_sp > 0) ? ret_stack[ret_sp - 1] : bp_predict_target;
+                                                branch_spec_target = (ret_sp > 0) ? ret_stack[ret_sp - 1] : bp_predict_target1;
                                             end
                                             default: begin
                                             end
