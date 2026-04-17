@@ -208,10 +208,7 @@ module load_store_queue (
                 for (k = 0; k < SIZE; k = k + 1) begin
                     if (valid[k] && ((op[k] == `OP_MOV_SM) || (op[k] == `OP_CALL)) && older_than(k, i)) begin
                         unknown_alias = !live_src_ready(addr_ready[k], addr_tag[k]);
-                        if (unknown_alias) begin
-                            if ((addr_tag[k] == addr_tag[i]) &&
-                                (addr_offset(k) == addr_offset(i))) can_issue = 0;
-                        end else if (effective_addr(k) == effective_addr(i)) begin
+                        if (!unknown_alias && (effective_addr(k) == effective_addr(i))) begin
                             if (!live_src_ready(data_ready[k], data_tag[k])) can_issue = 0;
                             else begin
                                 forward_found = 1;

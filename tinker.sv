@@ -552,6 +552,11 @@ module tinker_core (
     reg mem_valid;
     reg [4:0] mem_opcode;
     reg store_forward_hit;
+    reg fast_exec_valid_dbg;
+    reg [4:0] fast_exec_opcode_dbg;
+    reg fast_mem_valid_dbg;
+    reg [4:0] fast_mem_opcode_dbg;
+    reg fast_store_forward_dbg;
     integer exec_sel;
     reg branch_start_spec;
     reg [4:0] branch_spec_rob;
@@ -627,11 +632,17 @@ module tinker_core (
             end
         end
 
-        mem_valid = ls0_s1_valid || ls1_s1_valid;
+        if (fast_exec_valid_dbg) begin
+            exec_valid = 1'b1;
+            exec_opcode = fast_exec_opcode_dbg;
+        end
+
+        mem_valid = ls0_s1_valid || ls1_s1_valid || fast_mem_valid_dbg;
         mem_opcode = ls0_s1_valid ? rob_op[ls0_s1_rob] :
-            (ls1_s1_valid ? rob_op[ls1_s1_rob] : 5'b0);
+            (ls1_s1_valid ? rob_op[ls1_s1_rob] :
+            (fast_mem_valid_dbg ? fast_mem_opcode_dbg : 5'b0));
         store_forward_hit = (ls0_s1_valid && ls0_s0_forward_hit) ||
-            (ls1_s1_valid && ls1_s0_forward_hit);
+            (ls1_s1_valid && ls1_s0_forward_hit) || fast_store_forward_dbg;
     end
 
     ALU alu0 (.a(alu0_s0_a), .b(alu0_s0_b), .op(alu0_s0_op), .res(alu0_comb_res));
@@ -1240,6 +1251,11 @@ module tinker_core (
             allow_issue_lane1 = 1'b0;
             op0_forward_valid = 1'b0;
             op0_forward_value = 64'b0;
+            fast_exec_valid_dbg = 1'b0;
+            fast_exec_opcode_dbg = 5'b0;
+            fast_mem_valid_dbg = 1'b0;
+            fast_mem_opcode_dbg = 5'b0;
+            fast_store_forward_dbg = 1'b0;
 
             // Keep the architectural register seed state visible through the
             // base physical mappings until a register is renamed away.
@@ -1587,24 +1603,70 @@ module tinker_core (
             end
 
             if (lsq_issue_valid0) begin
-                ls0_s0_valid = 1'b1;
-                ls0_s0_op = lsq_issue_op0;
-                ls0_s0_rob = lsq_issue_rob0;
-                ls0_s0_has_dest = lsq_issue_has_dest0;
-                ls0_s0_dest = lsq_issue_dest0;
-                ls0_s0_addr = lsq_issue_addr0;
-                ls0_s0_forward_hit = lsq_issue_forward_hit0;
-                ls0_s0_forward_data = lsq_issue_forward_data0;
+                if (lsq_issue_op0 == OP_MOV_ML) begin
+                    rob_value[lsq_issue_rob0] =
+                        lsq_issue_forward_hit0 ? lsq_issue_forward_data0 :
+                        ((commit_mem_write && (commit_mem_addr == lsq_issue_addr0)) ? commit_mem_data : {
+                        memory.bytes[lsq_issue_addr0 + 7], memory.bytes[lsq_issue_addr0 + 6],
+                        memory.bytes[lsq_issue_addr0 + 5], memory.bytes[lsq_issue_addr0 + 4],
+                        memory.bytes[lsq_issue_addr0 + 3], memory.bytes[lsq_issue_addr0 + 2],
+                        memory.bytes[lsq_issue_addr0 + 1], memory.bytes[lsq_issue_addr0]});
+                    rob_ready[lsq_issue_rob0] = 1'b1;
+                    broadcast_result(lsq_issue_dest0, rob_value[lsq_issue_rob0]);
+                    if (lsq_issue_forward_hit0) begin
+                        fast_mem_valid_dbg = 1'b1;
+                        fast_mem_opcode_dbg = OP_MOV_ML;
+                        fast_store_forward_dbg = 1'b1;
+                    end else begin
+                        fast_exec_valid_dbg = 1'b1;
+                        fast_exec_opcode_dbg = OP_MOV_ML;
+                    end
+                end else begin
+                    ls0_s0_valid = 1'b1;
+                    ls0_s0_op = lsq_issue_op0;
+                    ls0_s0_rob = lsq_issue_rob0;
+                    ls0_s0_has_dest = lsq_issue_has_dest0;
+                    ls0_s0_dest = lsq_issue_dest0;
+                    ls0_s0_addr = lsq_issue_addr0;
+                    ls0_s0_forward_hit = lsq_issue_forward_hit0;
+                    ls0_s0_forward_data = lsq_issue_forward_data0;
+                    fast_exec_valid_dbg = 1'b1;
+                    fast_exec_opcode_dbg = lsq_issue_op0;
+                end
             end
             if (lsq_issue_valid1) begin
-                ls1_s0_valid = 1'b1;
-                ls1_s0_op = lsq_issue_op1;
-                ls1_s0_rob = lsq_issue_rob1;
-                ls1_s0_has_dest = lsq_issue_has_dest1;
-                ls1_s0_dest = lsq_issue_dest1;
-                ls1_s0_addr = lsq_issue_addr1;
-                ls1_s0_forward_hit = lsq_issue_forward_hit1;
-                ls1_s0_forward_data = lsq_issue_forward_data1;
+                if (lsq_issue_op1 == OP_MOV_ML) begin
+                    rob_value[lsq_issue_rob1] =
+                        lsq_issue_forward_hit1 ? lsq_issue_forward_data1 :
+                        ((commit_mem_write && (commit_mem_addr == lsq_issue_addr1)) ? commit_mem_data : {
+                        memory.bytes[lsq_issue_addr1 + 7], memory.bytes[lsq_issue_addr1 + 6],
+                        memory.bytes[lsq_issue_addr1 + 5], memory.bytes[lsq_issue_addr1 + 4],
+                        memory.bytes[lsq_issue_addr1 + 3], memory.bytes[lsq_issue_addr1 + 2],
+                        memory.bytes[lsq_issue_addr1 + 1], memory.bytes[lsq_issue_addr1]});
+                    rob_ready[lsq_issue_rob1] = 1'b1;
+                    broadcast_result(lsq_issue_dest1, rob_value[lsq_issue_rob1]);
+                    if (lsq_issue_forward_hit1) begin
+                        fast_mem_valid_dbg = 1'b1;
+                        fast_mem_opcode_dbg = OP_MOV_ML;
+                        fast_store_forward_dbg = 1'b1;
+                    end else if (!fast_exec_valid_dbg) begin
+                        fast_exec_valid_dbg = 1'b1;
+                        fast_exec_opcode_dbg = OP_MOV_ML;
+                    end
+                end else begin
+                    ls1_s0_valid = 1'b1;
+                    ls1_s0_op = lsq_issue_op1;
+                    ls1_s0_rob = lsq_issue_rob1;
+                    ls1_s0_has_dest = lsq_issue_has_dest1;
+                    ls1_s0_dest = lsq_issue_dest1;
+                    ls1_s0_addr = lsq_issue_addr1;
+                    ls1_s0_forward_hit = lsq_issue_forward_hit1;
+                    ls1_s0_forward_data = lsq_issue_forward_data1;
+                    if (!fast_exec_valid_dbg) begin
+                        fast_exec_valid_dbg = 1'b1;
+                        fast_exec_opcode_dbg = lsq_issue_op1;
+                    end
+                end
             end
 
             if (!control_stall) begin
@@ -1879,6 +1941,10 @@ module tinker_core (
                                     lsq_dispatch0_addr_ready = phys_ready[map_src];
                                     lsq_dispatch0_addr_val = phys_value[map_src];
                                     lsq_dispatch0_data_ready = 1'b0;
+                                end
+                                if ((op0 == OP_MOV_SM) || (op0 == OP_CALL)) begin
+                                    fast_exec_valid_dbg = 1'b1;
+                                    fast_exec_opcode_dbg = op0;
                                 end
                             end
                             if (op0 == OP_CALL && ret_sp < 16) begin
@@ -2201,6 +2267,10 @@ module tinker_core (
                                             lsq_dispatch1_addr_ready = phys_ready[map_src1];
                                             lsq_dispatch1_addr_val = phys_value[map_src1];
                                             lsq_dispatch1_data_ready = 1'b0;
+                                        end
+                                        if (((op1 == OP_MOV_SM) || (op1 == OP_CALL)) && !fast_exec_valid_dbg) begin
+                                            fast_exec_valid_dbg = 1'b1;
+                                            fast_exec_opcode_dbg = op1;
                                         end
                                     end
                                     if (op1 == OP_CALL && ret_sp < 16) begin
