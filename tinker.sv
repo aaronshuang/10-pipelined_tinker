@@ -101,6 +101,13 @@ module tinker_core (
         end
     endfunction
 
+    function has_commit_mem_side_effect;
+        input [4:0] op;
+        begin
+            has_commit_mem_side_effect = (op == OP_MOV_SM) || (op == OP_CALL);
+        end
+    endfunction
+
     function is_control_op;
         input [4:0] op;
         begin
@@ -449,6 +456,8 @@ module tinker_core (
     wire [63:0] cdb5_val;
     reg lsq_clear_en;
     reg [4:0] lsq_clear_idx;
+    reg lsq_clear_en2;
+    reg [4:0] lsq_clear_idx2;
     reg [4:0] lsq_commit_idx;
 
     reg arch_write_enable;
@@ -519,6 +528,7 @@ module tinker_core (
     reg branch_fast_resolve1;
     reg branch_fast_taken1;
     reg [63:0] branch_fast_target1;
+    reg allow_issue_lane1;
     integer flush_count;
     integer tail_snapshot;
 
@@ -785,8 +795,10 @@ module tinker_core (
         .flush_en(flush_en),
         .flush_rob(flush_rob),
         .flush_tail(flush_tail),
-        .clear_en(lsq_clear_en),
-        .clear_idx(lsq_clear_idx),
+        .clear_en0(lsq_clear_en),
+        .clear_idx0(lsq_clear_idx),
+        .clear_en1(lsq_clear_en2),
+        .clear_idx1(lsq_clear_idx2),
         .issue_take0(lsq_issue_valid0),
         .issue_take1(lsq_issue_valid1),
         .commit_idx(lsq_commit_idx),
@@ -1105,7 +1117,9 @@ module tinker_core (
             fpu_issue_take1 = 1'b0;
             fpu_issue_take_idx1 = 3'b0;
             lsq_clear_en = 1'b0;
+            lsq_clear_en2 = 1'b0;
             lsq_clear_idx = rob_head[4:0];
+            lsq_clear_idx2 = rob_head[4:0];
             lsq_commit_idx = rob_head[4:0];
             flush_en = 1'b0;
             flush_rob = 5'b0;
@@ -1120,6 +1134,7 @@ module tinker_core (
             branch_fast_resolve1 = 1'b0;
             branch_fast_taken1 = 1'b0;
             branch_fast_target1 = 64'b0;
+            allow_issue_lane1 = 1'b0;
 
             // Keep the architectural register seed state visible through the
             // base physical mappings until a register is renamed away.
@@ -1166,12 +1181,16 @@ module tinker_core (
                 if (rob_op[j] == OP_PRIV) begin
                     hlt = 1'b1;
                 end else if ((rob_count > 0) && rob_valid[rob_head] && rob_ready[rob_head] &&
-                    !uses_lsq(rob_op[rob_head]) && (rob_op[rob_head] != OP_PRIV)) begin
+                    !has_commit_mem_side_effect(rob_op[rob_head]) && (rob_op[rob_head] != OP_PRIV)) begin
                     k = rob_head;
                     if (rob_has_dest[k]) begin
                         arch_write_enable2 = 1'b1;
                         arch_write_rd2 = rob_arch_dest[k];
                         arch_write_data2 = rob_value[k];
+                    end
+                    if (uses_lsq(rob_op[k])) begin
+                        lsq_clear_en2 = 1'b1;
+                        lsq_clear_idx2 = k[4:0];
                     end
                     if (rob_has_dest[k] && (rob_old_phys[k] >= 32)) begin
                         free_list[free_tail] = rob_old_phys[k];
@@ -1794,7 +1813,11 @@ module tinker_core (
                                 fetch_pc = fetch_pc + 4;
                             end
 
-                            if (!control_stall && word_idx0 != 4'd15 && !is_control_op(op0) && (rob_count < ROB_SIZE)) begin
+                            allow_issue_lane1 = !is_control_op(op0) ||
+                                ((branch_fast_resolve0 ? (branch_fast_taken0 ? branch_fast_target0 : (pc0 + 4)) :
+                                    (branch_spec_taken ? branch_spec_target : (pc0 + 4))) == (pc0 + 4));
+
+                            if (!control_stall && word_idx0 != 4'd15 && allow_issue_lane1 && (rob_count < ROB_SIZE)) begin
                                 inst1 = fetch_words[word_idx1];
                                 op1 = inst1[31:27];
                                 rd1 = inst1[26:22];

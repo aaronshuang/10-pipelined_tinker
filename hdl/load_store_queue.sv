@@ -53,8 +53,10 @@ module load_store_queue (
     input flush_en,
     input [4:0] flush_rob,
     input [4:0] flush_tail,
-    input clear_en,
-    input [4:0] clear_idx,
+    input clear_en0,
+    input [4:0] clear_idx0,
+    input clear_en1,
+    input [4:0] clear_idx1,
     input issue_take0,
     input issue_take1,
     input [4:0] commit_idx,
@@ -266,9 +268,13 @@ module load_store_queue (
                     end
                 end
             end
-            if (clear_en) begin
-                valid[clear_idx] <= 1'b0;
-                issued[clear_idx] <= 1'b0;
+            if (clear_en0) begin
+                valid[clear_idx0] <= 1'b0;
+                issued[clear_idx0] <= 1'b0;
+            end
+            if (clear_en1) begin
+                valid[clear_idx1] <= 1'b0;
+                issued[clear_idx1] <= 1'b0;
             end
             if (issue_take0) issued[issue_idx0] <= 1'b1;
             if (issue_take1) issued[issue_idx1] <= 1'b1;
