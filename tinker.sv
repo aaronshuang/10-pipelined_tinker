@@ -4,6 +4,9 @@
 `include "hdl/FPU.sv"
 `include "hdl/memory.sv"
 `include "hdl/branch_predictor.sv"
+`include "hdl/alu_reservation_station.sv"
+`include "hdl/fpu_reservation_station.sv"
+`include "hdl/load_store_queue.sv"
 
 module tinker_core (
     input clk,
@@ -142,20 +145,6 @@ module tinker_core (
         end
     endfunction
 
-    function rob_before;
-        input [4:0] cand;
-        input [4:0] cur;
-        integer dc;
-        integer du;
-        begin
-            dc = cand - rob_head;
-            du = cur - rob_head;
-            if (dc < 0) dc = dc + ROB_SIZE;
-            if (du < 0) du = du + ROB_SIZE;
-            rob_before = (dc < du);
-        end
-    endfunction
-
     reg [63:0] fetch_pc;
     reg [63:0] fetch_line_base;
     reg fetch_line_valid;
@@ -169,6 +158,8 @@ module tinker_core (
     integer free_head;
     integer free_tail;
     integer free_count;
+    reg [63:0] ret_stack [0:15];
+    integer ret_sp;
 
     reg rob_valid [0:ROB_SIZE - 1];
     reg rob_ready [0:ROB_SIZE - 1];
@@ -187,47 +178,86 @@ module tinker_core (
     integer rob_tail;
     integer rob_count;
 
-    reg alu_rs_valid [0:ALU_RS_SIZE - 1];
-    reg [4:0] alu_rs_op [0:ALU_RS_SIZE - 1];
-    reg [4:0] alu_rs_rob [0:ALU_RS_SIZE - 1];
-    reg alu_rs_has_dest [0:ALU_RS_SIZE - 1];
-    reg [5:0] alu_rs_dest [0:ALU_RS_SIZE - 1];
-    reg alu_rs_s0_ready [0:ALU_RS_SIZE - 1];
-    reg alu_rs_s1_ready [0:ALU_RS_SIZE - 1];
-    reg alu_rs_s2_ready [0:ALU_RS_SIZE - 1];
-    reg [5:0] alu_rs_s0_tag [0:ALU_RS_SIZE - 1];
-    reg [5:0] alu_rs_s1_tag [0:ALU_RS_SIZE - 1];
-    reg [5:0] alu_rs_s2_tag [0:ALU_RS_SIZE - 1];
-    reg [63:0] alu_rs_s0_val [0:ALU_RS_SIZE - 1];
-    reg [63:0] alu_rs_s1_val [0:ALU_RS_SIZE - 1];
-    reg [63:0] alu_rs_s2_val [0:ALU_RS_SIZE - 1];
-    reg [11:0] alu_rs_imm [0:ALU_RS_SIZE - 1];
-    reg [63:0] alu_rs_pc [0:ALU_RS_SIZE - 1];
+    reg alu_dispatch0_valid;
+    reg [4:0] alu_dispatch0_op;
+    reg [4:0] alu_dispatch0_rob;
+    reg alu_dispatch0_has_dest;
+    reg [5:0] alu_dispatch0_dest;
+    reg alu_dispatch0_s0_ready;
+    reg [5:0] alu_dispatch0_s0_tag;
+    reg [63:0] alu_dispatch0_s0_val;
+    reg alu_dispatch0_s1_ready;
+    reg [5:0] alu_dispatch0_s1_tag;
+    reg [63:0] alu_dispatch0_s1_val;
+    reg alu_dispatch0_s2_ready;
+    reg [5:0] alu_dispatch0_s2_tag;
+    reg [63:0] alu_dispatch0_s2_val;
+    reg [11:0] alu_dispatch0_imm;
+    reg [63:0] alu_dispatch0_pc;
+    reg alu_dispatch1_valid;
+    reg [4:0] alu_dispatch1_op;
+    reg [4:0] alu_dispatch1_rob;
+    reg alu_dispatch1_has_dest;
+    reg [5:0] alu_dispatch1_dest;
+    reg alu_dispatch1_s0_ready;
+    reg [5:0] alu_dispatch1_s0_tag;
+    reg [63:0] alu_dispatch1_s0_val;
+    reg alu_dispatch1_s1_ready;
+    reg [5:0] alu_dispatch1_s1_tag;
+    reg [63:0] alu_dispatch1_s1_val;
+    reg alu_dispatch1_s2_ready;
+    reg [5:0] alu_dispatch1_s2_tag;
+    reg [63:0] alu_dispatch1_s2_val;
+    reg [11:0] alu_dispatch1_imm;
+    reg [63:0] alu_dispatch1_pc;
 
-    reg fpu_rs_valid [0:FPU_RS_SIZE - 1];
-    reg [4:0] fpu_rs_op [0:FPU_RS_SIZE - 1];
-    reg [4:0] fpu_rs_rob [0:FPU_RS_SIZE - 1];
-    reg [5:0] fpu_rs_dest [0:FPU_RS_SIZE - 1];
-    reg fpu_rs_s0_ready [0:FPU_RS_SIZE - 1];
-    reg fpu_rs_s1_ready [0:FPU_RS_SIZE - 1];
-    reg [5:0] fpu_rs_s0_tag [0:FPU_RS_SIZE - 1];
-    reg [5:0] fpu_rs_s1_tag [0:FPU_RS_SIZE - 1];
-    reg [63:0] fpu_rs_s0_val [0:FPU_RS_SIZE - 1];
-    reg [63:0] fpu_rs_s1_val [0:FPU_RS_SIZE - 1];
+    reg fpu_dispatch0_valid;
+    reg [4:0] fpu_dispatch0_op;
+    reg [4:0] fpu_dispatch0_rob;
+    reg [5:0] fpu_dispatch0_dest;
+    reg fpu_dispatch0_s0_ready;
+    reg [5:0] fpu_dispatch0_s0_tag;
+    reg [63:0] fpu_dispatch0_s0_val;
+    reg fpu_dispatch0_s1_ready;
+    reg [5:0] fpu_dispatch0_s1_tag;
+    reg [63:0] fpu_dispatch0_s1_val;
+    reg fpu_dispatch1_valid;
+    reg [4:0] fpu_dispatch1_op;
+    reg [4:0] fpu_dispatch1_rob;
+    reg [5:0] fpu_dispatch1_dest;
+    reg fpu_dispatch1_s0_ready;
+    reg [5:0] fpu_dispatch1_s0_tag;
+    reg [63:0] fpu_dispatch1_s0_val;
+    reg fpu_dispatch1_s1_ready;
+    reg [5:0] fpu_dispatch1_s1_tag;
+    reg [63:0] fpu_dispatch1_s1_val;
 
-    reg lsq_valid [0:ROB_SIZE - 1];
-    reg lsq_issued [0:ROB_SIZE - 1];
-    reg [4:0] lsq_op [0:ROB_SIZE - 1];
-    reg lsq_has_dest [0:ROB_SIZE - 1];
-    reg [5:0] lsq_dest [0:ROB_SIZE - 1];
-    reg lsq_addr_ready [0:ROB_SIZE - 1];
-    reg [5:0] lsq_addr_tag [0:ROB_SIZE - 1];
-    reg [63:0] lsq_addr_val [0:ROB_SIZE - 1];
-    reg lsq_data_ready [0:ROB_SIZE - 1];
-    reg [5:0] lsq_data_tag [0:ROB_SIZE - 1];
-    reg [63:0] lsq_data_val [0:ROB_SIZE - 1];
-    reg [11:0] lsq_imm [0:ROB_SIZE - 1];
-    reg [63:0] lsq_pc [0:ROB_SIZE - 1];
+    reg lsq_dispatch0_valid;
+    reg [4:0] lsq_dispatch0_rob;
+    reg [4:0] lsq_dispatch0_op;
+    reg lsq_dispatch0_has_dest;
+    reg [5:0] lsq_dispatch0_dest;
+    reg lsq_dispatch0_addr_ready;
+    reg [5:0] lsq_dispatch0_addr_tag;
+    reg [63:0] lsq_dispatch0_addr_val;
+    reg lsq_dispatch0_data_ready;
+    reg [5:0] lsq_dispatch0_data_tag;
+    reg [63:0] lsq_dispatch0_data_val;
+    reg [11:0] lsq_dispatch0_imm;
+    reg [63:0] lsq_dispatch0_pc;
+    reg lsq_dispatch1_valid;
+    reg [4:0] lsq_dispatch1_rob;
+    reg [4:0] lsq_dispatch1_op;
+    reg lsq_dispatch1_has_dest;
+    reg [5:0] lsq_dispatch1_dest;
+    reg lsq_dispatch1_addr_ready;
+    reg [5:0] lsq_dispatch1_addr_tag;
+    reg [63:0] lsq_dispatch1_addr_val;
+    reg lsq_dispatch1_data_ready;
+    reg [5:0] lsq_dispatch1_data_tag;
+    reg [63:0] lsq_dispatch1_data_val;
+    reg [11:0] lsq_dispatch1_imm;
+    reg [63:0] lsq_dispatch1_pc;
 
     reg alu0_s0_valid;
     reg alu0_s1_valid;
@@ -324,6 +354,90 @@ module tinker_core (
     wire [63:0] arch_r31_val;
     wire bp_predict_taken;
     wire [63:0] bp_predict_target;
+    wire [63:0] phys_ready_bus;
+    wire [4095:0] phys_value_bus;
+    wire [3:0] alu_rs_free_count;
+    wire [3:0] fpu_rs_free_count;
+    wire alu_issue_valid0;
+    wire [4:0] alu_issue_op0;
+    wire [4:0] alu_issue_rob0;
+    wire alu_issue_has_dest0;
+    wire [5:0] alu_issue_dest0;
+    wire [63:0] alu_issue_s0_val0;
+    wire [63:0] alu_issue_s1_val0;
+    wire [63:0] alu_issue_s2_val0;
+    wire [11:0] alu_issue_imm0;
+    wire [63:0] alu_issue_pc0;
+    wire [2:0] alu_issue_idx0;
+    wire alu_issue_valid1;
+    wire [4:0] alu_issue_op1;
+    wire [4:0] alu_issue_rob1;
+    wire alu_issue_has_dest1;
+    wire [5:0] alu_issue_dest1;
+    wire [63:0] alu_issue_s0_val1;
+    wire [63:0] alu_issue_s1_val1;
+    wire [63:0] alu_issue_s2_val1;
+    wire [11:0] alu_issue_imm1;
+    wire [63:0] alu_issue_pc1;
+    wire [2:0] alu_issue_idx1;
+    wire fpu_issue_valid0;
+    wire [4:0] fpu_issue_op0;
+    wire [4:0] fpu_issue_rob0;
+    wire [5:0] fpu_issue_dest0;
+    wire [63:0] fpu_issue_s0_val0;
+    wire [63:0] fpu_issue_s1_val0;
+    wire [2:0] fpu_issue_idx0;
+    wire fpu_issue_valid1;
+    wire [4:0] fpu_issue_op1;
+    wire [4:0] fpu_issue_rob1;
+    wire [5:0] fpu_issue_dest1;
+    wire [63:0] fpu_issue_s0_val1;
+    wire [63:0] fpu_issue_s1_val1;
+    wire [2:0] fpu_issue_idx1;
+    reg fpu_issue_take0;
+    reg [2:0] fpu_issue_take_idx0;
+    reg fpu_issue_take1;
+    reg [2:0] fpu_issue_take_idx1;
+    wire [ROB_SIZE - 1:0] lsq_store_ready_bus;
+    wire lsq_issue_valid0;
+    wire [4:0] lsq_issue_rob0;
+    wire [4:0] lsq_issue_op0;
+    wire lsq_issue_has_dest0;
+    wire [5:0] lsq_issue_dest0;
+    wire [63:0] lsq_issue_addr0;
+    wire lsq_issue_forward_hit0;
+    wire [63:0] lsq_issue_forward_data0;
+    wire [4:0] lsq_issue_idx0;
+    wire lsq_issue_valid1;
+    wire [4:0] lsq_issue_rob1;
+    wire [4:0] lsq_issue_op1;
+    wire lsq_issue_has_dest1;
+    wire [5:0] lsq_issue_dest1;
+    wire [63:0] lsq_issue_addr1;
+    wire lsq_issue_forward_hit1;
+    wire [63:0] lsq_issue_forward_data1;
+    wire [4:0] lsq_issue_idx1;
+    wire [63:0] lsq_commit_addr;
+    wire [63:0] lsq_commit_data;
+    wire cdb0_en;
+    wire [5:0] cdb0_tag;
+    wire [63:0] cdb0_val;
+    wire cdb1_en;
+    wire [5:0] cdb1_tag;
+    wire [63:0] cdb1_val;
+    wire cdb2_en;
+    wire [5:0] cdb2_tag;
+    wire [63:0] cdb2_val;
+    wire cdb3_en;
+    wire [5:0] cdb3_tag;
+    wire [63:0] cdb3_val;
+    wire cdb4_en;
+    wire [5:0] cdb4_tag;
+    wire [63:0] cdb4_val;
+    wire cdb5_en;
+    wire [5:0] cdb5_tag;
+    wire [63:0] cdb5_val;
+    wire lsq_clear_en;
 
     reg arch_write_enable;
     reg [4:0] arch_write_rd;
@@ -340,22 +454,9 @@ module tinker_core (
     integer j;
     integer k;
     integer idx;
-    integer next_tail;
-    integer rs_idx;
-    integer f_idx;
     integer entry_idx;
-    integer issue0_idx;
-    integer issue1_idx;
-    integer ls_issue0;
-    integer ls_issue1;
-    integer scan_idx;
-    integer younger_stop;
-    integer free_rs_found;
-    integer free_fp_found;
-    integer can_issue;
-    integer forward_found;
-    integer forward_idx;
-    reg [63:0] forward_value;
+    integer free_rs_slots;
+    integer free_fp_slots;
     reg fpu0_s2_valid_hold;
     reg fpu1_s2_valid_hold;
     reg [63:0] fpu0_s2_res_hold;
@@ -422,46 +523,228 @@ module tinker_core (
         .update_target(bp_update_target)
     );
 
+    assign cdb0_en = alu0_s1_valid && alu0_s1_has_dest;
+    assign cdb0_tag = alu0_s1_dest;
+    assign cdb0_val = alu0_s1_res;
+    assign cdb1_en = alu1_s1_valid && alu1_s1_has_dest;
+    assign cdb1_tag = alu1_s1_dest;
+    assign cdb1_val = alu1_s1_res;
+    assign cdb2_en = fpu0_valid[4];
+    assign cdb2_tag = fpu0_dest[4];
+    assign cdb2_val = fpu0_res[4];
+    assign cdb3_en = fpu1_valid[4];
+    assign cdb3_tag = fpu1_dest[4];
+    assign cdb3_val = fpu1_res[4];
+    assign cdb4_en = ls0_s1_valid && ls0_s1_has_dest;
+    assign cdb4_tag = ls0_s1_dest;
+    assign cdb4_val = ls0_s1_res;
+    assign cdb5_en = ls1_s1_valid && ls1_s1_has_dest;
+    assign cdb5_tag = ls1_s1_dest;
+    assign cdb5_val = ls1_s1_res;
+    assign lsq_clear_en = (rob_count > 0) && rob_valid[rob_head] && rob_ready[rob_head];
+
+    genvar g;
+    generate
+        for (g = 0; g < PHYS_REGS; g = g + 1) begin : phys_bus_pack
+            assign phys_ready_bus[g] = phys_ready[g];
+            assign phys_value_bus[(g * 64) +: 64] = phys_value[g];
+        end
+    endgenerate
+
+    alu_reservation_station alu_rs (
+        .clk(~clk),
+        .reset(reset),
+        .live_ready(phys_ready_bus),
+        .live_values(phys_value_bus),
+        .dispatch0_valid(alu_dispatch0_valid),
+        .dispatch0_op(alu_dispatch0_op),
+        .dispatch0_rob(alu_dispatch0_rob),
+        .dispatch0_has_dest(alu_dispatch0_has_dest),
+        .dispatch0_dest(alu_dispatch0_dest),
+        .dispatch0_s0_ready(alu_dispatch0_s0_ready),
+        .dispatch0_s0_tag(alu_dispatch0_s0_tag),
+        .dispatch0_s0_val(alu_dispatch0_s0_val),
+        .dispatch0_s1_ready(alu_dispatch0_s1_ready),
+        .dispatch0_s1_tag(alu_dispatch0_s1_tag),
+        .dispatch0_s1_val(alu_dispatch0_s1_val),
+        .dispatch0_s2_ready(alu_dispatch0_s2_ready),
+        .dispatch0_s2_tag(alu_dispatch0_s2_tag),
+        .dispatch0_s2_val(alu_dispatch0_s2_val),
+        .dispatch0_imm(alu_dispatch0_imm),
+        .dispatch0_pc(alu_dispatch0_pc),
+        .dispatch1_valid(alu_dispatch1_valid),
+        .dispatch1_op(alu_dispatch1_op),
+        .dispatch1_rob(alu_dispatch1_rob),
+        .dispatch1_has_dest(alu_dispatch1_has_dest),
+        .dispatch1_dest(alu_dispatch1_dest),
+        .dispatch1_s0_ready(alu_dispatch1_s0_ready),
+        .dispatch1_s0_tag(alu_dispatch1_s0_tag),
+        .dispatch1_s0_val(alu_dispatch1_s0_val),
+        .dispatch1_s1_ready(alu_dispatch1_s1_ready),
+        .dispatch1_s1_tag(alu_dispatch1_s1_tag),
+        .dispatch1_s1_val(alu_dispatch1_s1_val),
+        .dispatch1_s2_ready(alu_dispatch1_s2_ready),
+        .dispatch1_s2_tag(alu_dispatch1_s2_tag),
+        .dispatch1_s2_val(alu_dispatch1_s2_val),
+        .dispatch1_imm(alu_dispatch1_imm),
+        .dispatch1_pc(alu_dispatch1_pc),
+        .cdb0_en(cdb0_en), .cdb0_tag(cdb0_tag), .cdb0_val(cdb0_val),
+        .cdb1_en(cdb1_en), .cdb1_tag(cdb1_tag), .cdb1_val(cdb1_val),
+        .cdb2_en(cdb2_en), .cdb2_tag(cdb2_tag), .cdb2_val(cdb2_val),
+        .cdb3_en(cdb3_en), .cdb3_tag(cdb3_tag), .cdb3_val(cdb3_val),
+        .cdb4_en(cdb4_en), .cdb4_tag(cdb4_tag), .cdb4_val(cdb4_val),
+        .cdb5_en(cdb5_en), .cdb5_tag(cdb5_tag), .cdb5_val(cdb5_val),
+        .issue_take0(alu_issue_valid0),
+        .issue_take1(alu_issue_valid1),
+        .free_count(alu_rs_free_count),
+        .issue_valid0(alu_issue_valid0),
+        .issue_op0(alu_issue_op0),
+        .issue_rob0(alu_issue_rob0),
+        .issue_has_dest0(alu_issue_has_dest0),
+        .issue_dest0(alu_issue_dest0),
+        .issue_s0_val0(alu_issue_s0_val0),
+        .issue_s1_val0(alu_issue_s1_val0),
+        .issue_s2_val0(alu_issue_s2_val0),
+        .issue_imm0(alu_issue_imm0),
+        .issue_pc0(alu_issue_pc0),
+        .issue_idx0(alu_issue_idx0),
+        .issue_valid1(alu_issue_valid1),
+        .issue_op1(alu_issue_op1),
+        .issue_rob1(alu_issue_rob1),
+        .issue_has_dest1(alu_issue_has_dest1),
+        .issue_dest1(alu_issue_dest1),
+        .issue_s0_val1(alu_issue_s0_val1),
+        .issue_s1_val1(alu_issue_s1_val1),
+        .issue_s2_val1(alu_issue_s2_val1),
+        .issue_imm1(alu_issue_imm1),
+        .issue_pc1(alu_issue_pc1),
+        .issue_idx1(alu_issue_idx1)
+    );
+
+    fpu_reservation_station fpu_rs (
+        .clk(~clk),
+        .reset(reset),
+        .live_ready(phys_ready_bus),
+        .live_values(phys_value_bus),
+        .dispatch0_valid(fpu_dispatch0_valid),
+        .dispatch0_op(fpu_dispatch0_op),
+        .dispatch0_rob(fpu_dispatch0_rob),
+        .dispatch0_dest(fpu_dispatch0_dest),
+        .dispatch0_s0_ready(fpu_dispatch0_s0_ready),
+        .dispatch0_s0_tag(fpu_dispatch0_s0_tag),
+        .dispatch0_s0_val(fpu_dispatch0_s0_val),
+        .dispatch0_s1_ready(fpu_dispatch0_s1_ready),
+        .dispatch0_s1_tag(fpu_dispatch0_s1_tag),
+        .dispatch0_s1_val(fpu_dispatch0_s1_val),
+        .dispatch1_valid(fpu_dispatch1_valid),
+        .dispatch1_op(fpu_dispatch1_op),
+        .dispatch1_rob(fpu_dispatch1_rob),
+        .dispatch1_dest(fpu_dispatch1_dest),
+        .dispatch1_s0_ready(fpu_dispatch1_s0_ready),
+        .dispatch1_s0_tag(fpu_dispatch1_s0_tag),
+        .dispatch1_s0_val(fpu_dispatch1_s0_val),
+        .dispatch1_s1_ready(fpu_dispatch1_s1_ready),
+        .dispatch1_s1_tag(fpu_dispatch1_s1_tag),
+        .dispatch1_s1_val(fpu_dispatch1_s1_val),
+        .cdb0_en(cdb0_en), .cdb0_tag(cdb0_tag), .cdb0_val(cdb0_val),
+        .cdb1_en(cdb1_en), .cdb1_tag(cdb1_tag), .cdb1_val(cdb1_val),
+        .cdb2_en(cdb2_en), .cdb2_tag(cdb2_tag), .cdb2_val(cdb2_val),
+        .cdb3_en(cdb3_en), .cdb3_tag(cdb3_tag), .cdb3_val(cdb3_val),
+        .cdb4_en(cdb4_en), .cdb4_tag(cdb4_tag), .cdb4_val(cdb4_val),
+        .cdb5_en(cdb5_en), .cdb5_tag(cdb5_tag), .cdb5_val(cdb5_val),
+        .issue_take0(fpu_issue_take0),
+        .issue_take_idx0(fpu_issue_take_idx0),
+        .issue_take1(fpu_issue_take1),
+        .issue_take_idx1(fpu_issue_take_idx1),
+        .free_count(fpu_rs_free_count),
+        .issue_valid0(fpu_issue_valid0),
+        .issue_op0(fpu_issue_op0),
+        .issue_rob0(fpu_issue_rob0),
+        .issue_dest0(fpu_issue_dest0),
+        .issue_s0_val0(fpu_issue_s0_val0),
+        .issue_s1_val0(fpu_issue_s1_val0),
+        .issue_idx0(fpu_issue_idx0),
+        .issue_valid1(fpu_issue_valid1),
+        .issue_op1(fpu_issue_op1),
+        .issue_rob1(fpu_issue_rob1),
+        .issue_dest1(fpu_issue_dest1),
+        .issue_s0_val1(fpu_issue_s0_val1),
+        .issue_s1_val1(fpu_issue_s1_val1),
+        .issue_idx1(fpu_issue_idx1)
+    );
+
+    load_store_queue lsq (
+        .clk(~clk),
+        .reset(reset),
+        .live_ready(phys_ready_bus),
+        .live_values(phys_value_bus),
+        .rob_head(rob_head[4:0]),
+        .dispatch0_valid(lsq_dispatch0_valid),
+        .dispatch0_rob(lsq_dispatch0_rob),
+        .dispatch0_op(lsq_dispatch0_op),
+        .dispatch0_has_dest(lsq_dispatch0_has_dest),
+        .dispatch0_dest(lsq_dispatch0_dest),
+        .dispatch0_addr_ready(lsq_dispatch0_addr_ready),
+        .dispatch0_addr_tag(lsq_dispatch0_addr_tag),
+        .dispatch0_addr_val(lsq_dispatch0_addr_val),
+        .dispatch0_data_ready(lsq_dispatch0_data_ready),
+        .dispatch0_data_tag(lsq_dispatch0_data_tag),
+        .dispatch0_data_val(lsq_dispatch0_data_val),
+        .dispatch0_imm(lsq_dispatch0_imm),
+        .dispatch0_pc(lsq_dispatch0_pc),
+        .dispatch1_valid(lsq_dispatch1_valid),
+        .dispatch1_rob(lsq_dispatch1_rob),
+        .dispatch1_op(lsq_dispatch1_op),
+        .dispatch1_has_dest(lsq_dispatch1_has_dest),
+        .dispatch1_dest(lsq_dispatch1_dest),
+        .dispatch1_addr_ready(lsq_dispatch1_addr_ready),
+        .dispatch1_addr_tag(lsq_dispatch1_addr_tag),
+        .dispatch1_addr_val(lsq_dispatch1_addr_val),
+        .dispatch1_data_ready(lsq_dispatch1_data_ready),
+        .dispatch1_data_tag(lsq_dispatch1_data_tag),
+        .dispatch1_data_val(lsq_dispatch1_data_val),
+        .dispatch1_imm(lsq_dispatch1_imm),
+        .dispatch1_pc(lsq_dispatch1_pc),
+        .cdb0_en(cdb0_en), .cdb0_tag(cdb0_tag), .cdb0_val(cdb0_val),
+        .cdb1_en(cdb1_en), .cdb1_tag(cdb1_tag), .cdb1_val(cdb1_val),
+        .cdb2_en(cdb2_en), .cdb2_tag(cdb2_tag), .cdb2_val(cdb2_val),
+        .cdb3_en(cdb3_en), .cdb3_tag(cdb3_tag), .cdb3_val(cdb3_val),
+        .cdb4_en(cdb4_en), .cdb4_tag(cdb4_tag), .cdb4_val(cdb4_val),
+        .cdb5_en(cdb5_en), .cdb5_tag(cdb5_tag), .cdb5_val(cdb5_val),
+        .clear_en(lsq_clear_en),
+        .clear_idx(rob_head[4:0]),
+        .issue_take0(lsq_issue_valid0),
+        .issue_take1(lsq_issue_valid1),
+        .commit_idx(rob_head[4:0]),
+        .store_ready_bus(lsq_store_ready_bus),
+        .issue_valid0(lsq_issue_valid0),
+        .issue_rob0(lsq_issue_rob0),
+        .issue_op0(lsq_issue_op0),
+        .issue_has_dest0(lsq_issue_has_dest0),
+        .issue_dest0(lsq_issue_dest0),
+        .issue_addr0(lsq_issue_addr0),
+        .issue_forward_hit0(lsq_issue_forward_hit0),
+        .issue_forward_data0(lsq_issue_forward_data0),
+        .issue_idx0(lsq_issue_idx0),
+        .issue_valid1(lsq_issue_valid1),
+        .issue_rob1(lsq_issue_rob1),
+        .issue_op1(lsq_issue_op1),
+        .issue_has_dest1(lsq_issue_has_dest1),
+        .issue_dest1(lsq_issue_dest1),
+        .issue_addr1(lsq_issue_addr1),
+        .issue_forward_hit1(lsq_issue_forward_hit1),
+        .issue_forward_data1(lsq_issue_forward_data1),
+        .issue_idx1(lsq_issue_idx1),
+        .commit_addr(lsq_commit_addr),
+        .commit_data(lsq_commit_data)
+    );
+
     task broadcast_result;
         input [5:0] tag;
         input [63:0] value;
         begin
             phys_value[tag] = value;
             phys_ready[tag] = 1'b1;
-            for (j = 0; j < ALU_RS_SIZE; j = j + 1) begin
-                if (alu_rs_valid[j] && !alu_rs_s0_ready[j] && (alu_rs_s0_tag[j] == tag)) begin
-                    alu_rs_s0_ready[j] = 1'b1;
-                    alu_rs_s0_val[j] = value;
-                end
-                if (alu_rs_valid[j] && !alu_rs_s1_ready[j] && (alu_rs_s1_tag[j] == tag)) begin
-                    alu_rs_s1_ready[j] = 1'b1;
-                    alu_rs_s1_val[j] = value;
-                end
-                if (alu_rs_valid[j] && !alu_rs_s2_ready[j] && (alu_rs_s2_tag[j] == tag)) begin
-                    alu_rs_s2_ready[j] = 1'b1;
-                    alu_rs_s2_val[j] = value;
-                end
-            end
-            for (j = 0; j < FPU_RS_SIZE; j = j + 1) begin
-                if (fpu_rs_valid[j] && !fpu_rs_s0_ready[j] && (fpu_rs_s0_tag[j] == tag)) begin
-                    fpu_rs_s0_ready[j] = 1'b1;
-                    fpu_rs_s0_val[j] = value;
-                end
-                if (fpu_rs_valid[j] && !fpu_rs_s1_ready[j] && (fpu_rs_s1_tag[j] == tag)) begin
-                    fpu_rs_s1_ready[j] = 1'b1;
-                    fpu_rs_s1_val[j] = value;
-                end
-            end
-            for (j = 0; j < ROB_SIZE; j = j + 1) begin
-                if (lsq_valid[j] && !lsq_addr_ready[j] && (lsq_addr_tag[j] == tag)) begin
-                    lsq_addr_ready[j] = 1'b1;
-                    lsq_addr_val[j] = value;
-                end
-                if (lsq_valid[j] && !lsq_data_ready[j] && (lsq_data_tag[j] == tag)) begin
-                    lsq_data_ready[j] = 1'b1;
-                    lsq_data_val[j] = value;
-                end
-            end
         end
     endtask
 
@@ -519,6 +802,7 @@ module tinker_core (
             free_head = 0;
             free_tail = 0;
             free_count = FREE_REGS;
+            ret_sp = 0;
             for (i = 0; i < FREE_REGS; i = i + 1) begin
                 free_list[i] = i + 32;
             end
@@ -547,52 +831,18 @@ module tinker_core (
                 rob_value[i] = 64'b0;
                 rob_target[i] = 64'b0;
                 rob_taken[i] = 1'b0;
-                lsq_valid[i] = 1'b0;
-                lsq_issued[i] = 1'b0;
-                lsq_op[i] = 5'b0;
-                lsq_has_dest[i] = 1'b0;
-                lsq_dest[i] = 6'b0;
-                lsq_addr_ready[i] = 1'b0;
-                lsq_addr_tag[i] = 6'b0;
-                lsq_addr_val[i] = 64'b0;
-                lsq_data_ready[i] = 1'b0;
-                lsq_data_tag[i] = 6'b0;
-                lsq_data_val[i] = 64'b0;
-                lsq_imm[i] = 12'b0;
-                lsq_pc[i] = 64'b0;
             end
 
-            for (i = 0; i < ALU_RS_SIZE; i = i + 1) begin
-                alu_rs_valid[i] = 1'b0;
-                alu_rs_op[i] = 5'b0;
-                alu_rs_rob[i] = 5'b0;
-                alu_rs_has_dest[i] = 1'b0;
-                alu_rs_dest[i] = 6'b0;
-                alu_rs_s0_ready[i] = 1'b0;
-                alu_rs_s1_ready[i] = 1'b0;
-                alu_rs_s2_ready[i] = 1'b0;
-                alu_rs_s0_tag[i] = 6'b0;
-                alu_rs_s1_tag[i] = 6'b0;
-                alu_rs_s2_tag[i] = 6'b0;
-                alu_rs_s0_val[i] = 64'b0;
-                alu_rs_s1_val[i] = 64'b0;
-                alu_rs_s2_val[i] = 64'b0;
-                alu_rs_imm[i] = 12'b0;
-                alu_rs_pc[i] = 64'b0;
-            end
-
-            for (i = 0; i < FPU_RS_SIZE; i = i + 1) begin
-                fpu_rs_valid[i] = 1'b0;
-                fpu_rs_op[i] = 5'b0;
-                fpu_rs_rob[i] = 5'b0;
-                fpu_rs_dest[i] = 6'b0;
-                fpu_rs_s0_ready[i] = 1'b0;
-                fpu_rs_s1_ready[i] = 1'b0;
-                fpu_rs_s0_tag[i] = 6'b0;
-                fpu_rs_s1_tag[i] = 6'b0;
-                fpu_rs_s0_val[i] = 64'b0;
-                fpu_rs_s1_val[i] = 64'b0;
-            end
+            alu_dispatch0_valid = 1'b0;
+            alu_dispatch1_valid = 1'b0;
+            fpu_dispatch0_valid = 1'b0;
+            fpu_dispatch1_valid = 1'b0;
+            lsq_dispatch0_valid = 1'b0;
+            lsq_dispatch1_valid = 1'b0;
+            fpu_issue_take0 = 1'b0;
+            fpu_issue_take_idx0 = 3'b0;
+            fpu_issue_take1 = 1'b0;
+            fpu_issue_take_idx1 = 3'b0;
 
             alu0_s0_valid = 1'b0;
             alu0_s1_valid = 1'b0;
@@ -622,6 +872,16 @@ module tinker_core (
             arch_write_enable = 1'b0;
             commit_mem_write = 1'b0;
             bp_update_en = 1'b0;
+            alu_dispatch0_valid = 1'b0;
+            alu_dispatch1_valid = 1'b0;
+            fpu_dispatch0_valid = 1'b0;
+            fpu_dispatch1_valid = 1'b0;
+            lsq_dispatch0_valid = 1'b0;
+            lsq_dispatch1_valid = 1'b0;
+            fpu_issue_take0 = 1'b0;
+            fpu_issue_take_idx0 = 3'b0;
+            fpu_issue_take1 = 1'b0;
+            fpu_issue_take_idx1 = 3'b0;
 
             if (rob_count > 0 && rob_valid[rob_head] && rob_ready[rob_head]) begin
                 if (rob_has_dest[rob_head]) begin
@@ -632,8 +892,8 @@ module tinker_core (
 
                 if ((rob_op[rob_head] == OP_MOV_SM) || (rob_op[rob_head] == OP_CALL)) begin
                     commit_mem_write = 1'b1;
-                    commit_mem_addr = lsq_addr_val[rob_head] + ((rob_op[rob_head] == OP_CALL) ? 64'hfffffffffffffff8 : signext12(lsq_imm[rob_head]));
-                    commit_mem_data = lsq_data_val[rob_head];
+                    commit_mem_addr = lsq_commit_addr;
+                    commit_mem_data = lsq_commit_data;
                 end
 
                 if (rob_has_dest[rob_head]) begin
@@ -648,7 +908,6 @@ module tinker_core (
                     hlt = 1'b1;
                 end
 
-                lsq_valid[rob_head] = 1'b0;
                 rob_valid[rob_head] = 1'b0;
                 rob_ready[rob_head] = 1'b0;
                 rob_head = (rob_head + 1) % ROB_SIZE;
@@ -697,6 +956,7 @@ module tinker_core (
                     broadcast_result(ls0_s1_dest, ls0_s1_res);
                 end else if (rob_op[ls0_s1_rob] == OP_RET) begin
                     rob_value[ls0_s1_rob] = ls0_s1_res;
+                    if (ret_sp > 0) ret_sp = ret_sp - 1;
                     resolve_branch(ls0_s1_rob, 1'b1, ls0_s1_res, rob_pc[ls0_s1_rob]);
                 end
             end
@@ -707,13 +967,13 @@ module tinker_core (
                     broadcast_result(ls1_s1_dest, ls1_s1_res);
                 end else if (rob_op[ls1_s1_rob] == OP_RET) begin
                     rob_value[ls1_s1_rob] = ls1_s1_res;
+                    if (ret_sp > 0) ret_sp = ret_sp - 1;
                     resolve_branch(ls1_s1_rob, 1'b1, ls1_s1_res, rob_pc[ls1_s1_rob]);
                 end
             end
 
             for (i = 0; i < ROB_SIZE; i = i + 1) begin
-                if (lsq_valid[i] && !rob_store_done[i] && (rob_op[i] == OP_MOV_SM || rob_op[i] == OP_CALL) &&
-                    lsq_addr_ready[i] && lsq_data_ready[i]) begin
+                if (lsq_store_ready_bus[i] && !rob_store_done[i] && (rob_op[i] == OP_MOV_SM || rob_op[i] == OP_CALL)) begin
                     rob_store_done[i] = 1'b1;
                     if (rob_op[i] == OP_MOV_SM) rob_ready[i] = 1'b1;
                     else if (rob_branch_done[i]) rob_ready[i] = 1'b1;
@@ -844,157 +1104,104 @@ module tinker_core (
             ls0_s1_has_dest = ls0_s0_has_dest;
             ls0_s1_dest = ls0_s0_dest;
             ls0_s1_is_ret = (ls0_s0_op == OP_RET);
-            ls0_s1_res = ls0_s0_forward_hit ? ls0_s0_forward_data : {
+            ls0_s1_res = (ls0_s0_op == OP_RET && ret_sp > 0) ? ret_stack[ret_sp - 1] :
+                (ls0_s0_forward_hit ? ls0_s0_forward_data :
+                ((commit_mem_write && (commit_mem_addr == ls0_s0_addr)) ? commit_mem_data : {
                 memory.bytes[ls0_s0_addr + 7], memory.bytes[ls0_s0_addr + 6], memory.bytes[ls0_s0_addr + 5], memory.bytes[ls0_s0_addr + 4],
                 memory.bytes[ls0_s0_addr + 3], memory.bytes[ls0_s0_addr + 2], memory.bytes[ls0_s0_addr + 1], memory.bytes[ls0_s0_addr]
-            };
+            }));
             ls1_s1_valid = ls1_s0_valid;
             ls1_s1_rob = ls1_s0_rob;
             ls1_s1_has_dest = ls1_s0_has_dest;
             ls1_s1_dest = ls1_s0_dest;
             ls1_s1_is_ret = (ls1_s0_op == OP_RET);
-            ls1_s1_res = ls1_s0_forward_hit ? ls1_s0_forward_data : {
+            ls1_s1_res = (ls1_s0_op == OP_RET && ret_sp > 0) ? ret_stack[ret_sp - 1] :
+                (ls1_s0_forward_hit ? ls1_s0_forward_data :
+                ((commit_mem_write && (commit_mem_addr == ls1_s0_addr)) ? commit_mem_data : {
                 memory.bytes[ls1_s0_addr + 7], memory.bytes[ls1_s0_addr + 6], memory.bytes[ls1_s0_addr + 5], memory.bytes[ls1_s0_addr + 4],
                 memory.bytes[ls1_s0_addr + 3], memory.bytes[ls1_s0_addr + 2], memory.bytes[ls1_s0_addr + 1], memory.bytes[ls1_s0_addr]
-            };
+            }));
             ls0_s0_valid = 1'b0;
             ls1_s0_valid = 1'b0;
 
-            issue0_idx = -1;
-            issue1_idx = -1;
-            for (i = 0; i < ALU_RS_SIZE; i = i + 1) begin
-                if (alu_rs_valid[i] && alu_rs_s0_ready[i] &&
-                    ((alu_rs_op[i] == OP_BR) || (alu_rs_op[i] == OP_BRR_R) || (alu_rs_op[i] == OP_BRR_L) ||
-                     (alu_rs_op[i] == OP_CALL) ||
-                     ((alu_rs_op[i] == OP_BRNZ) && alu_rs_s1_ready[i]) ||
-                     ((alu_rs_op[i] == OP_BRGT) && alu_rs_s1_ready[i] && alu_rs_s2_ready[i]) ||
-                     (!(alu_rs_op[i] == OP_BR || alu_rs_op[i] == OP_BRR_R || alu_rs_op[i] == OP_BRR_L || alu_rs_op[i] == OP_CALL || alu_rs_op[i] == OP_BRNZ || alu_rs_op[i] == OP_BRGT) &&
-                      ((alu_rs_op[i] == OP_NOT || alu_rs_op[i] == OP_MOV_RR) || alu_rs_s1_ready[i])))) begin
-                    if (issue0_idx == -1) issue0_idx = i;
-                    else if (issue1_idx == -1) issue1_idx = i;
-                end
-            end
-
-            if (issue0_idx != -1) begin
+            if (alu_issue_valid0) begin
                 alu0_s0_valid = 1'b1;
-                alu0_s0_op = alu_rs_op[issue0_idx];
-                alu0_s0_rob = alu_rs_rob[issue0_idx];
-                alu0_s0_has_dest = alu_rs_has_dest[issue0_idx];
-                alu0_s0_dest = alu_rs_dest[issue0_idx];
-                alu0_s0_a = alu_rs_s0_val[issue0_idx];
-                alu0_s0_b = alu_rs_s1_val[issue0_idx];
-                alu0_s0_c = alu_rs_s2_val[issue0_idx];
-                alu0_s0_imm = alu_rs_imm[issue0_idx];
-                alu0_s0_pc = alu_rs_pc[issue0_idx];
-                if ((alu_rs_op[issue0_idx] == OP_ADDI) || (alu_rs_op[issue0_idx] == OP_SUBI) ||
-                    (alu_rs_op[issue0_idx] == OP_SHFTRI) || (alu_rs_op[issue0_idx] == OP_SHFTLI) ||
-                    (alu_rs_op[issue0_idx] == OP_MOV_L)) begin
-                    alu0_s0_b = imm_operand(alu_rs_op[issue0_idx], alu_rs_imm[issue0_idx]);
+                alu0_s0_op = alu_issue_op0;
+                alu0_s0_rob = alu_issue_rob0;
+                alu0_s0_has_dest = alu_issue_has_dest0;
+                alu0_s0_dest = alu_issue_dest0;
+                alu0_s0_a = alu_issue_s0_val0;
+                alu0_s0_b = alu_issue_s1_val0;
+                alu0_s0_c = alu_issue_s2_val0;
+                alu0_s0_imm = alu_issue_imm0;
+                alu0_s0_pc = alu_issue_pc0;
+                if ((alu_issue_op0 == OP_ADDI) || (alu_issue_op0 == OP_SUBI) ||
+                    (alu_issue_op0 == OP_SHFTRI) || (alu_issue_op0 == OP_SHFTLI) ||
+                    (alu_issue_op0 == OP_MOV_L)) begin
+                    alu0_s0_b = imm_operand(alu_issue_op0, alu_issue_imm0);
                 end
-                alu_rs_valid[issue0_idx] = 1'b0;
             end
 
-            if (issue1_idx != -1) begin
+            if (alu_issue_valid1) begin
                 alu1_s0_valid = 1'b1;
-                alu1_s0_op = alu_rs_op[issue1_idx];
-                alu1_s0_rob = alu_rs_rob[issue1_idx];
-                alu1_s0_has_dest = alu_rs_has_dest[issue1_idx];
-                alu1_s0_dest = alu_rs_dest[issue1_idx];
-                alu1_s0_a = alu_rs_s0_val[issue1_idx];
-                alu1_s0_b = alu_rs_s1_val[issue1_idx];
-                alu1_s0_c = alu_rs_s2_val[issue1_idx];
-                alu1_s0_imm = alu_rs_imm[issue1_idx];
-                alu1_s0_pc = alu_rs_pc[issue1_idx];
-                if ((alu_rs_op[issue1_idx] == OP_ADDI) || (alu_rs_op[issue1_idx] == OP_SUBI) ||
-                    (alu_rs_op[issue1_idx] == OP_SHFTRI) || (alu_rs_op[issue1_idx] == OP_SHFTLI) ||
-                    (alu_rs_op[issue1_idx] == OP_MOV_L)) begin
-                    alu1_s0_b = imm_operand(alu_rs_op[issue1_idx], alu_rs_imm[issue1_idx]);
-                end
-                alu_rs_valid[issue1_idx] = 1'b0;
-            end
-
-            issue0_idx = -1;
-            issue1_idx = -1;
-            for (i = 0; i < FPU_RS_SIZE; i = i + 1) begin
-                if (fpu_rs_valid[i] && fpu_rs_s0_ready[i] && fpu_rs_s1_ready[i]) begin
-                    if (issue0_idx == -1) issue0_idx = i;
-                    else if (issue1_idx == -1) issue1_idx = i;
+                alu1_s0_op = alu_issue_op1;
+                alu1_s0_rob = alu_issue_rob1;
+                alu1_s0_has_dest = alu_issue_has_dest1;
+                alu1_s0_dest = alu_issue_dest1;
+                alu1_s0_a = alu_issue_s0_val1;
+                alu1_s0_b = alu_issue_s1_val1;
+                alu1_s0_c = alu_issue_s2_val1;
+                alu1_s0_imm = alu_issue_imm1;
+                alu1_s0_pc = alu_issue_pc1;
+                if ((alu_issue_op1 == OP_ADDI) || (alu_issue_op1 == OP_SUBI) ||
+                    (alu_issue_op1 == OP_SHFTRI) || (alu_issue_op1 == OP_SHFTLI) ||
+                    (alu_issue_op1 == OP_MOV_L)) begin
+                    alu1_s0_b = imm_operand(alu_issue_op1, alu_issue_imm1);
                 end
             end
 
-            if ((issue0_idx != -1) && !fpu0_valid[0]) begin
+            if (fpu_issue_valid0) begin
+                fpu_issue_take0 = 1'b1;
+                fpu_issue_take_idx0 = fpu_issue_idx0;
                 fpu0_valid[0] = 1'b1;
-                fpu0_op[0] = fpu_rs_op[issue0_idx];
-                fpu0_rob[0] = fpu_rs_rob[issue0_idx];
-                fpu0_dest[0] = fpu_rs_dest[issue0_idx];
-                fpu0_a[0] = fpu_rs_s0_val[issue0_idx];
-                fpu0_b[0] = fpu_rs_s1_val[issue0_idx];
+                fpu0_op[0] = fpu_issue_op0;
+                fpu0_rob[0] = fpu_issue_rob0;
+                fpu0_dest[0] = fpu_issue_dest0;
+                fpu0_a[0] = fpu_issue_s0_val0;
+                fpu0_b[0] = fpu_issue_s1_val0;
                 fpu0_res[0] = 64'b0;
-                fpu_rs_valid[issue0_idx] = 1'b0;
             end
-            if ((issue1_idx != -1) && !fpu1_valid[0]) begin
+            if (fpu_issue_valid1) begin
+                fpu_issue_take1 = 1'b1;
+                fpu_issue_take_idx1 = fpu_issue_idx1;
                 fpu1_valid[0] = 1'b1;
-                fpu1_op[0] = fpu_rs_op[issue1_idx];
-                fpu1_rob[0] = fpu_rs_rob[issue1_idx];
-                fpu1_dest[0] = fpu_rs_dest[issue1_idx];
-                fpu1_a[0] = fpu_rs_s0_val[issue1_idx];
-                fpu1_b[0] = fpu_rs_s1_val[issue1_idx];
+                fpu1_op[0] = fpu_issue_op1;
+                fpu1_rob[0] = fpu_issue_rob1;
+                fpu1_dest[0] = fpu_issue_dest1;
+                fpu1_a[0] = fpu_issue_s0_val1;
+                fpu1_b[0] = fpu_issue_s1_val1;
                 fpu1_res[0] = 64'b0;
-                fpu_rs_valid[issue1_idx] = 1'b0;
             end
 
-            ls_issue0 = -1;
-            ls_issue1 = -1;
-            for (i = 0; i < ROB_SIZE; i = i + 1) begin
-                if (lsq_valid[i] && !lsq_issued[i] && (rob_op[i] == OP_MOV_ML || rob_op[i] == OP_RET) && lsq_addr_ready[i]) begin
-                    can_issue = 1;
-                    forward_found = 0;
-                    forward_idx = -1;
-                    forward_value = 64'b0;
-                    for (k = 0; k < ROB_SIZE; k = k + 1) begin
-                        if (lsq_valid[k] && (rob_op[k] == OP_MOV_SM || rob_op[k] == OP_CALL) && rob_before(k[4:0], i[4:0])) begin
-                            if (!lsq_addr_ready[k]) can_issue = 0;
-                            else if (lsq_addr_val[k] + ((rob_op[k] == OP_CALL) ? 64'hfffffffffffffff8 : signext12(lsq_imm[k])) == lsq_addr_val[i] + ((rob_op[i] == OP_RET) ? 64'hfffffffffffffff8 : signext12(lsq_imm[i]))) begin
-                                if (!lsq_data_ready[k]) can_issue = 0;
-                                else begin
-                                    forward_found = 1;
-                                    forward_idx = k;
-                                    forward_value = lsq_data_val[k];
-                                end
-                            end
-                        end
-                    end
-                    if (can_issue) begin
-                        if (ls_issue0 == -1) begin
-                            ls_issue0 = i;
-                            ls0_s0_forward_hit = forward_found;
-                            ls0_s0_forward_data = forward_value;
-                        end else if (ls_issue1 == -1) begin
-                            ls_issue1 = i;
-                            ls1_s0_forward_hit = forward_found;
-                            ls1_s0_forward_data = forward_value;
-                        end
-                    end
-                end
-            end
-
-            if (ls_issue0 != -1) begin
+            if (lsq_issue_valid0) begin
                 ls0_s0_valid = 1'b1;
-                ls0_s0_op = lsq_op[ls_issue0];
-                ls0_s0_rob = ls_issue0[4:0];
-                ls0_s0_has_dest = lsq_has_dest[ls_issue0];
-                ls0_s0_dest = lsq_dest[ls_issue0];
-                ls0_s0_addr = lsq_addr_val[ls_issue0] + ((lsq_op[ls_issue0] == OP_RET) ? 64'hfffffffffffffff8 : signext12(lsq_imm[ls_issue0]));
-                lsq_issued[ls_issue0] = 1'b1;
+                ls0_s0_op = lsq_issue_op0;
+                ls0_s0_rob = lsq_issue_rob0;
+                ls0_s0_has_dest = lsq_issue_has_dest0;
+                ls0_s0_dest = lsq_issue_dest0;
+                ls0_s0_addr = lsq_issue_addr0;
+                ls0_s0_forward_hit = lsq_issue_forward_hit0;
+                ls0_s0_forward_data = lsq_issue_forward_data0;
             end
-            if (ls_issue1 != -1) begin
+            if (lsq_issue_valid1) begin
                 ls1_s0_valid = 1'b1;
-                ls1_s0_op = lsq_op[ls_issue1];
-                ls1_s0_rob = ls_issue1[4:0];
-                ls1_s0_has_dest = lsq_has_dest[ls_issue1];
-                ls1_s0_dest = lsq_dest[ls_issue1];
-                ls1_s0_addr = lsq_addr_val[ls_issue1] + ((lsq_op[ls_issue1] == OP_RET) ? 64'hfffffffffffffff8 : signext12(lsq_imm[ls_issue1]));
-                lsq_issued[ls_issue1] = 1'b1;
+                ls1_s0_op = lsq_issue_op1;
+                ls1_s0_rob = lsq_issue_rob1;
+                ls1_s0_has_dest = lsq_issue_has_dest1;
+                ls1_s0_dest = lsq_issue_dest1;
+                ls1_s0_addr = lsq_issue_addr1;
+                ls1_s0_forward_hit = lsq_issue_forward_hit1;
+                ls1_s0_forward_data = lsq_issue_forward_data1;
             end
 
             if (!control_stall) begin
@@ -1017,22 +1224,12 @@ module tinker_core (
                     pc0 = fetch_pc;
 
                     if (rob_count < ROB_SIZE) begin
-                        free_rs_found = -1;
-                        free_fp_found = -1;
-                        if (uses_alu_rs(op0)) begin
-                            for (i = 0; i < ALU_RS_SIZE; i = i + 1) begin
-                                if (!alu_rs_valid[i] && free_rs_found == -1) free_rs_found = i;
-                            end
-                        end
-                        if (is_fpu_op(op0)) begin
-                            for (i = 0; i < FPU_RS_SIZE; i = i + 1) begin
-                                if (!fpu_rs_valid[i] && free_fp_found == -1) free_fp_found = i;
-                            end
-                        end
+                        free_rs_slots = alu_rs_free_count;
+                        free_fp_slots = fpu_rs_free_count;
 
                         if ((!writes_dest(op0) || (free_count > 0)) &&
-                            (!uses_alu_rs(op0) || (free_rs_found != -1)) &&
-                            (!is_fpu_op(op0) || (free_fp_found != -1))) begin
+                            (!uses_alu_rs(op0) || (free_rs_slots > 0)) &&
+                            (!is_fpu_op(op0) || (free_fp_slots > 0))) begin
                             entry_idx = rob_tail;
                             rob_valid[entry_idx] = 1'b1;
                             rob_ready[entry_idx] = (op0 == OP_PRIV);
@@ -1061,148 +1258,154 @@ module tinker_core (
                             end
 
                             if (uses_alu_rs(op0)) begin
-                                alu_rs_valid[free_rs_found] = 1'b1;
-                                alu_rs_op[free_rs_found] = op0;
-                                alu_rs_rob[free_rs_found] = entry_idx[4:0];
-                                alu_rs_has_dest[free_rs_found] = writes_dest(op0);
-                                alu_rs_dest[free_rs_found] = rob_phys_dest[entry_idx];
-                                alu_rs_imm[free_rs_found] = imm0;
-                                alu_rs_pc[free_rs_found] = pc0;
-                                alu_rs_s0_ready[free_rs_found] = 1'b0;
-                                alu_rs_s1_ready[free_rs_found] = 1'b0;
-                                alu_rs_s2_ready[free_rs_found] = 1'b0;
+                                alu_dispatch0_valid = 1'b1;
+                                alu_dispatch0_op = op0;
+                                alu_dispatch0_rob = entry_idx[4:0];
+                                alu_dispatch0_has_dest = writes_dest(op0);
+                                alu_dispatch0_dest = rob_phys_dest[entry_idx];
+                                alu_dispatch0_imm = imm0;
+                                alu_dispatch0_pc = pc0;
+                                alu_dispatch0_s0_ready = 1'b0;
+                                alu_dispatch0_s1_ready = 1'b0;
+                                alu_dispatch0_s2_ready = 1'b0;
 
                                 case (op0)
                                     OP_ADDI, OP_SUBI, OP_SHFTRI, OP_SHFTLI, OP_MOV_L: begin
                                         map_src = rob_has_dest[entry_idx] ? rob_old_phys[entry_idx] : rat[rd0];
-                                        alu_rs_s0_tag[free_rs_found] = map_src;
-                                        alu_rs_s0_ready[free_rs_found] = phys_ready[map_src];
-                                        alu_rs_s0_val[free_rs_found] = phys_value[map_src];
-                                        alu_rs_s1_ready[free_rs_found] = 1'b1;
-                                        alu_rs_s1_val[free_rs_found] = imm_operand(op0, imm0);
+                                        alu_dispatch0_s0_tag = map_src;
+                                        alu_dispatch0_s0_ready = phys_ready[map_src];
+                                        alu_dispatch0_s0_val = phys_value[map_src];
+                                        alu_dispatch0_s1_ready = 1'b1;
+                                        alu_dispatch0_s1_val = imm_operand(op0, imm0);
                                     end
                                     OP_MOV_RR, OP_NOT: begin
                                         map_src = rat[rs0];
-                                        alu_rs_s0_tag[free_rs_found] = map_src;
-                                        alu_rs_s0_ready[free_rs_found] = phys_ready[map_src];
-                                        alu_rs_s0_val[free_rs_found] = phys_value[map_src];
-                                        alu_rs_s1_ready[free_rs_found] = 1'b1;
-                                        alu_rs_s1_val[free_rs_found] = 64'b0;
+                                        alu_dispatch0_s0_tag = map_src;
+                                        alu_dispatch0_s0_ready = phys_ready[map_src];
+                                        alu_dispatch0_s0_val = phys_value[map_src];
+                                        alu_dispatch0_s1_ready = 1'b1;
+                                        alu_dispatch0_s1_val = 64'b0;
                                     end
                                     OP_BR: begin
                                         map_src = rat[rd0];
-                                        alu_rs_s0_tag[free_rs_found] = map_src;
-                                        alu_rs_s0_ready[free_rs_found] = phys_ready[map_src];
-                                        alu_rs_s0_val[free_rs_found] = phys_value[map_src];
+                                        alu_dispatch0_s0_tag = map_src;
+                                        alu_dispatch0_s0_ready = phys_ready[map_src];
+                                        alu_dispatch0_s0_val = phys_value[map_src];
                                     end
                                     OP_BRR_R: begin
                                         map_src = rat[rd0];
-                                        alu_rs_s0_tag[free_rs_found] = map_src;
-                                        alu_rs_s0_ready[free_rs_found] = phys_ready[map_src];
-                                        alu_rs_s0_val[free_rs_found] = phys_value[map_src];
+                                        alu_dispatch0_s0_tag = map_src;
+                                        alu_dispatch0_s0_ready = phys_ready[map_src];
+                                        alu_dispatch0_s0_val = phys_value[map_src];
                                     end
                                     OP_BRR_L: begin
-                                        alu_rs_s0_ready[free_rs_found] = 1'b1;
-                                        alu_rs_s0_val[free_rs_found] = 64'b0;
+                                        alu_dispatch0_s0_ready = 1'b1;
+                                        alu_dispatch0_s0_val = 64'b0;
                                     end
                                     OP_BRNZ: begin
                                         map_src = rat[rd0];
-                                        alu_rs_s0_tag[free_rs_found] = map_src;
-                                        alu_rs_s0_ready[free_rs_found] = phys_ready[map_src];
-                                        alu_rs_s0_val[free_rs_found] = phys_value[map_src];
+                                        alu_dispatch0_s0_tag = map_src;
+                                        alu_dispatch0_s0_ready = phys_ready[map_src];
+                                        alu_dispatch0_s0_val = phys_value[map_src];
                                         map_src = rat[rs0];
-                                        alu_rs_s1_tag[free_rs_found] = map_src;
-                                        alu_rs_s1_ready[free_rs_found] = phys_ready[map_src];
-                                        alu_rs_s1_val[free_rs_found] = phys_value[map_src];
+                                        alu_dispatch0_s1_tag = map_src;
+                                        alu_dispatch0_s1_ready = phys_ready[map_src];
+                                        alu_dispatch0_s1_val = phys_value[map_src];
                                     end
                                     OP_BRGT: begin
                                         map_src = rat[rd0];
-                                        alu_rs_s0_tag[free_rs_found] = map_src;
-                                        alu_rs_s0_ready[free_rs_found] = phys_ready[map_src];
-                                        alu_rs_s0_val[free_rs_found] = phys_value[map_src];
+                                        alu_dispatch0_s0_tag = map_src;
+                                        alu_dispatch0_s0_ready = phys_ready[map_src];
+                                        alu_dispatch0_s0_val = phys_value[map_src];
                                         map_src = rat[rs0];
-                                        alu_rs_s1_tag[free_rs_found] = map_src;
-                                        alu_rs_s1_ready[free_rs_found] = phys_ready[map_src];
-                                        alu_rs_s1_val[free_rs_found] = phys_value[map_src];
+                                        alu_dispatch0_s1_tag = map_src;
+                                        alu_dispatch0_s1_ready = phys_ready[map_src];
+                                        alu_dispatch0_s1_val = phys_value[map_src];
                                         map_src = rat[rt0];
-                                        alu_rs_s2_tag[free_rs_found] = map_src;
-                                        alu_rs_s2_ready[free_rs_found] = phys_ready[map_src];
-                                        alu_rs_s2_val[free_rs_found] = phys_value[map_src];
+                                        alu_dispatch0_s2_tag = map_src;
+                                        alu_dispatch0_s2_ready = phys_ready[map_src];
+                                        alu_dispatch0_s2_val = phys_value[map_src];
                                     end
                                     OP_CALL: begin
                                         map_src = rat[rd0];
-                                        alu_rs_s0_tag[free_rs_found] = map_src;
-                                        alu_rs_s0_ready[free_rs_found] = phys_ready[map_src];
-                                        alu_rs_s0_val[free_rs_found] = phys_value[map_src];
+                                        alu_dispatch0_s0_tag = map_src;
+                                        alu_dispatch0_s0_ready = phys_ready[map_src];
+                                        alu_dispatch0_s0_val = phys_value[map_src];
                                     end
                                     default: begin
                                         map_src = rat[rs0];
-                                        alu_rs_s0_tag[free_rs_found] = map_src;
-                                        alu_rs_s0_ready[free_rs_found] = phys_ready[map_src];
-                                        alu_rs_s0_val[free_rs_found] = phys_value[map_src];
+                                        alu_dispatch0_s0_tag = map_src;
+                                        alu_dispatch0_s0_ready = phys_ready[map_src];
+                                        alu_dispatch0_s0_val = phys_value[map_src];
                                         if (op0 == OP_NOT) begin
-                                            alu_rs_s1_ready[free_rs_found] = 1'b1;
-                                            alu_rs_s1_val[free_rs_found] = 64'b0;
+                                            alu_dispatch0_s1_ready = 1'b1;
+                                            alu_dispatch0_s1_val = 64'b0;
                                         end else begin
                                             map_src = rat[rt0];
-                                            alu_rs_s1_tag[free_rs_found] = map_src;
-                                            alu_rs_s1_ready[free_rs_found] = phys_ready[map_src];
-                                            alu_rs_s1_val[free_rs_found] = phys_value[map_src];
+                                            alu_dispatch0_s1_tag = map_src;
+                                            alu_dispatch0_s1_ready = phys_ready[map_src];
+                                            alu_dispatch0_s1_val = phys_value[map_src];
                                         end
                                     end
                                 endcase
+                                free_rs_slots = free_rs_slots - 1;
                             end else if (is_fpu_op(op0)) begin
-                                fpu_rs_valid[free_fp_found] = 1'b1;
-                                fpu_rs_op[free_fp_found] = op0;
-                                fpu_rs_rob[free_fp_found] = entry_idx[4:0];
-                                fpu_rs_dest[free_fp_found] = rob_phys_dest[entry_idx];
                                 map_src = rat[rs0];
-                                fpu_rs_s0_tag[free_fp_found] = map_src;
-                                fpu_rs_s0_ready[free_fp_found] = phys_ready[map_src];
-                                fpu_rs_s0_val[free_fp_found] = phys_value[map_src];
-                                map_src = rat[rt0];
-                                fpu_rs_s1_tag[free_fp_found] = map_src;
-                                fpu_rs_s1_ready[free_fp_found] = phys_ready[map_src];
-                                fpu_rs_s1_val[free_fp_found] = phys_value[map_src];
+                                map_src1 = rat[rt0];
+                                fpu_dispatch0_valid = 1'b1;
+                                fpu_dispatch0_op = op0;
+                                fpu_dispatch0_rob = entry_idx[4:0];
+                                fpu_dispatch0_dest = rob_phys_dest[entry_idx];
+                                fpu_dispatch0_s0_tag = map_src;
+                                fpu_dispatch0_s0_ready = phys_ready[map_src];
+                                fpu_dispatch0_s0_val = phys_value[map_src];
+                                fpu_dispatch0_s1_tag = map_src1;
+                                fpu_dispatch0_s1_ready = phys_ready[map_src1];
+                                fpu_dispatch0_s1_val = phys_value[map_src1];
+                                free_fp_slots = free_fp_slots - 1;
                             end
 
                             if (uses_lsq(op0)) begin
-                                lsq_valid[entry_idx] = 1'b1;
-                                lsq_issued[entry_idx] = 1'b0;
-                                lsq_op[entry_idx] = op0;
-                                lsq_has_dest[entry_idx] = writes_dest(op0);
-                                lsq_dest[entry_idx] = rob_phys_dest[entry_idx];
-                                lsq_imm[entry_idx] = imm0;
-                                lsq_pc[entry_idx] = pc0;
+                                lsq_dispatch0_valid = 1'b1;
+                                lsq_dispatch0_rob = entry_idx[4:0];
+                                lsq_dispatch0_op = op0;
+                                lsq_dispatch0_has_dest = writes_dest(op0);
+                                lsq_dispatch0_dest = rob_phys_dest[entry_idx];
+                                lsq_dispatch0_imm = imm0;
+                                lsq_dispatch0_pc = pc0;
                                 if (op0 == OP_MOV_ML) begin
                                     map_src = rat[rs0];
-                                    lsq_addr_tag[entry_idx] = map_src;
-                                    lsq_addr_ready[entry_idx] = phys_ready[map_src];
-                                    lsq_addr_val[entry_idx] = phys_value[map_src];
-                                    lsq_data_ready[entry_idx] = 1'b0;
+                                    lsq_dispatch0_addr_tag = map_src;
+                                    lsq_dispatch0_addr_ready = phys_ready[map_src];
+                                    lsq_dispatch0_addr_val = phys_value[map_src];
+                                    lsq_dispatch0_data_ready = 1'b0;
                                 end else if (op0 == OP_MOV_SM) begin
                                     map_src = rat[rd0];
-                                    lsq_addr_tag[entry_idx] = map_src;
-                                    lsq_addr_ready[entry_idx] = phys_ready[map_src];
-                                    lsq_addr_val[entry_idx] = phys_value[map_src];
+                                    lsq_dispatch0_addr_tag = map_src;
+                                    lsq_dispatch0_addr_ready = phys_ready[map_src];
+                                    lsq_dispatch0_addr_val = phys_value[map_src];
                                     map_src = rat[rs0];
-                                    lsq_data_tag[entry_idx] = map_src;
-                                    lsq_data_ready[entry_idx] = phys_ready[map_src];
-                                    lsq_data_val[entry_idx] = phys_value[map_src];
+                                    lsq_dispatch0_data_tag = map_src;
+                                    lsq_dispatch0_data_ready = phys_ready[map_src];
+                                    lsq_dispatch0_data_val = phys_value[map_src];
                                 end else if (op0 == OP_CALL) begin
                                     map_src = rat[31];
-                                    lsq_addr_tag[entry_idx] = map_src;
-                                    lsq_addr_ready[entry_idx] = phys_ready[map_src];
-                                    lsq_addr_val[entry_idx] = phys_value[map_src];
-                                    lsq_data_ready[entry_idx] = 1'b1;
-                                    lsq_data_val[entry_idx] = pc0 + 4;
+                                    lsq_dispatch0_addr_tag = map_src;
+                                    lsq_dispatch0_addr_ready = phys_ready[map_src];
+                                    lsq_dispatch0_addr_val = phys_value[map_src];
+                                    lsq_dispatch0_data_ready = 1'b1;
+                                    lsq_dispatch0_data_val = pc0 + 4;
                                 end else if (op0 == OP_RET) begin
                                     map_src = rat[31];
-                                    lsq_addr_tag[entry_idx] = map_src;
-                                    lsq_addr_ready[entry_idx] = phys_ready[map_src];
-                                    lsq_addr_val[entry_idx] = phys_value[map_src];
-                                    lsq_data_ready[entry_idx] = 1'b0;
+                                    lsq_dispatch0_addr_tag = map_src;
+                                    lsq_dispatch0_addr_ready = phys_ready[map_src];
+                                    lsq_dispatch0_addr_val = phys_value[map_src];
+                                    lsq_dispatch0_data_ready = 1'b0;
                                 end
+                            end
+                            if (op0 == OP_CALL && ret_sp < 16) begin
+                                ret_stack[ret_sp] = pc0 + 4;
+                                ret_sp = ret_sp + 1;
                             end
 
                             rob_tail = (rob_tail + 1) % ROB_SIZE;
@@ -1219,22 +1422,9 @@ module tinker_core (
                                 imm1 = inst1[11:0];
                                 pc1 = pc0 + 4;
 
-                                free_rs_found = -1;
-                                free_fp_found = -1;
-                                if (uses_alu_rs(op1)) begin
-                                    for (i = 0; i < ALU_RS_SIZE; i = i + 1) begin
-                                        if (!alu_rs_valid[i] && free_rs_found == -1) free_rs_found = i;
-                                    end
-                                end
-                                if (is_fpu_op(op1)) begin
-                                    for (i = 0; i < FPU_RS_SIZE; i = i + 1) begin
-                                        if (!fpu_rs_valid[i] && free_fp_found == -1) free_fp_found = i;
-                                    end
-                                end
-
                                 if ((!writes_dest(op1) || (free_count > 0)) &&
-                                    (!uses_alu_rs(op1) || (free_rs_found != -1)) &&
-                                    (!is_fpu_op(op1) || (free_fp_found != -1))) begin
+                                    (!uses_alu_rs(op1) || (free_rs_slots > 0)) &&
+                                    (!is_fpu_op(op1) || (free_fp_slots > 0))) begin
                                     entry_idx = rob_tail;
                                     rob_valid[entry_idx] = 1'b1;
                                     rob_ready[entry_idx] = (op1 == OP_PRIV);
@@ -1264,131 +1454,137 @@ module tinker_core (
                                     end
 
                                     if (uses_alu_rs(op1)) begin
-                                        alu_rs_valid[free_rs_found] = 1'b1;
-                                        alu_rs_op[free_rs_found] = op1;
-                                        alu_rs_rob[free_rs_found] = entry_idx[4:0];
-                                        alu_rs_has_dest[free_rs_found] = writes_dest(op1);
-                                        alu_rs_dest[free_rs_found] = rob_phys_dest[entry_idx];
-                                        alu_rs_imm[free_rs_found] = imm1;
-                                        alu_rs_pc[free_rs_found] = pc1;
-                                        alu_rs_s0_ready[free_rs_found] = 1'b0;
-                                        alu_rs_s1_ready[free_rs_found] = 1'b0;
-                                        alu_rs_s2_ready[free_rs_found] = 1'b0;
+                                        alu_dispatch1_valid = 1'b1;
+                                        alu_dispatch1_op = op1;
+                                        alu_dispatch1_rob = entry_idx[4:0];
+                                        alu_dispatch1_has_dest = writes_dest(op1);
+                                        alu_dispatch1_dest = rob_phys_dest[entry_idx];
+                                        alu_dispatch1_imm = imm1;
+                                        alu_dispatch1_pc = pc1;
+                                        alu_dispatch1_s0_ready = 1'b0;
+                                        alu_dispatch1_s1_ready = 1'b0;
+                                        alu_dispatch1_s2_ready = 1'b0;
 
                                         case (op1)
                                             OP_ADDI, OP_SUBI, OP_SHFTRI, OP_SHFTLI, OP_MOV_L: begin
                                                 map_src1 = rob_old_phys[entry_idx];
-                                                alu_rs_s0_tag[free_rs_found] = map_src1;
-                                                alu_rs_s0_ready[free_rs_found] = phys_ready[map_src1];
-                                                alu_rs_s0_val[free_rs_found] = phys_value[map_src1];
-                                                alu_rs_s1_ready[free_rs_found] = 1'b1;
-                                                alu_rs_s1_val[free_rs_found] = imm_operand(op1, imm1);
+                                                alu_dispatch1_s0_tag = map_src1;
+                                                alu_dispatch1_s0_ready = phys_ready[map_src1];
+                                                alu_dispatch1_s0_val = phys_value[map_src1];
+                                                alu_dispatch1_s1_ready = 1'b1;
+                                                alu_dispatch1_s1_val = imm_operand(op1, imm1);
                                             end
                                             OP_MOV_RR, OP_NOT: begin
                                                 map_src1 = (writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1];
-                                                alu_rs_s0_tag[free_rs_found] = map_src1;
-                                                alu_rs_s0_ready[free_rs_found] = phys_ready[map_src1];
-                                                alu_rs_s0_val[free_rs_found] = phys_value[map_src1];
-                                                alu_rs_s1_ready[free_rs_found] = 1'b1;
-                                                alu_rs_s1_val[free_rs_found] = 64'b0;
+                                                alu_dispatch1_s0_tag = map_src1;
+                                                alu_dispatch1_s0_ready = phys_ready[map_src1];
+                                                alu_dispatch1_s0_val = phys_value[map_src1];
+                                                alu_dispatch1_s1_ready = 1'b1;
+                                                alu_dispatch1_s1_val = 64'b0;
                                             end
                                             OP_BR, OP_BRR_R, OP_CALL: begin
                                                 map_src1 = (writes_dest(op0) && (rd1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rd1];
-                                                alu_rs_s0_tag[free_rs_found] = map_src1;
-                                                alu_rs_s0_ready[free_rs_found] = phys_ready[map_src1];
-                                                alu_rs_s0_val[free_rs_found] = phys_value[map_src1];
+                                                alu_dispatch1_s0_tag = map_src1;
+                                                alu_dispatch1_s0_ready = phys_ready[map_src1];
+                                                alu_dispatch1_s0_val = phys_value[map_src1];
                                             end
                                             OP_BRR_L: begin
-                                                alu_rs_s0_ready[free_rs_found] = 1'b1;
-                                                alu_rs_s0_val[free_rs_found] = 64'b0;
+                                                alu_dispatch1_s0_ready = 1'b1;
+                                                alu_dispatch1_s0_val = 64'b0;
                                             end
                                             OP_BRNZ: begin
                                                 map_src1 = (writes_dest(op0) && (rd1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rd1];
-                                                alu_rs_s0_tag[free_rs_found] = map_src1;
-                                                alu_rs_s0_ready[free_rs_found] = phys_ready[map_src1];
-                                                alu_rs_s0_val[free_rs_found] = phys_value[map_src1];
+                                                alu_dispatch1_s0_tag = map_src1;
+                                                alu_dispatch1_s0_ready = phys_ready[map_src1];
+                                                alu_dispatch1_s0_val = phys_value[map_src1];
                                                 map_src1 = (writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1];
-                                                alu_rs_s1_tag[free_rs_found] = map_src1;
-                                                alu_rs_s1_ready[free_rs_found] = phys_ready[map_src1];
-                                                alu_rs_s1_val[free_rs_found] = phys_value[map_src1];
+                                                alu_dispatch1_s1_tag = map_src1;
+                                                alu_dispatch1_s1_ready = phys_ready[map_src1];
+                                                alu_dispatch1_s1_val = phys_value[map_src1];
                                             end
                                             OP_BRGT: begin
                                                 map_src1 = (writes_dest(op0) && (rd1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rd1];
-                                                alu_rs_s0_tag[free_rs_found] = map_src1;
-                                                alu_rs_s0_ready[free_rs_found] = phys_ready[map_src1];
-                                                alu_rs_s0_val[free_rs_found] = phys_value[map_src1];
+                                                alu_dispatch1_s0_tag = map_src1;
+                                                alu_dispatch1_s0_ready = phys_ready[map_src1];
+                                                alu_dispatch1_s0_val = phys_value[map_src1];
                                                 map_src1 = (writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1];
-                                                alu_rs_s1_tag[free_rs_found] = map_src1;
-                                                alu_rs_s1_ready[free_rs_found] = phys_ready[map_src1];
-                                                alu_rs_s1_val[free_rs_found] = phys_value[map_src1];
+                                                alu_dispatch1_s1_tag = map_src1;
+                                                alu_dispatch1_s1_ready = phys_ready[map_src1];
+                                                alu_dispatch1_s1_val = phys_value[map_src1];
                                                 map_src1 = (writes_dest(op0) && (rt1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rt1];
-                                                alu_rs_s2_tag[free_rs_found] = map_src1;
-                                                alu_rs_s2_ready[free_rs_found] = phys_ready[map_src1];
-                                                alu_rs_s2_val[free_rs_found] = phys_value[map_src1];
+                                                alu_dispatch1_s2_tag = map_src1;
+                                                alu_dispatch1_s2_ready = phys_ready[map_src1];
+                                                alu_dispatch1_s2_val = phys_value[map_src1];
                                             end
                                             default: begin
                                                 map_src1 = (writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1];
-                                                alu_rs_s0_tag[free_rs_found] = map_src1;
-                                                alu_rs_s0_ready[free_rs_found] = phys_ready[map_src1];
-                                                alu_rs_s0_val[free_rs_found] = phys_value[map_src1];
+                                                alu_dispatch1_s0_tag = map_src1;
+                                                alu_dispatch1_s0_ready = phys_ready[map_src1];
+                                                alu_dispatch1_s0_val = phys_value[map_src1];
                                                 map_src1 = (writes_dest(op0) && (rt1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rt1];
-                                                alu_rs_s1_tag[free_rs_found] = map_src1;
-                                                alu_rs_s1_ready[free_rs_found] = phys_ready[map_src1];
-                                                alu_rs_s1_val[free_rs_found] = phys_value[map_src1];
+                                                alu_dispatch1_s1_tag = map_src1;
+                                                alu_dispatch1_s1_ready = phys_ready[map_src1];
+                                                alu_dispatch1_s1_val = phys_value[map_src1];
                                             end
                                         endcase
+                                        free_rs_slots = free_rs_slots - 1;
                                     end else if (is_fpu_op(op1)) begin
-                                        fpu_rs_valid[free_fp_found] = 1'b1;
-                                        fpu_rs_op[free_fp_found] = op1;
-                                        fpu_rs_rob[free_fp_found] = entry_idx[4:0];
-                                        fpu_rs_dest[free_fp_found] = rob_phys_dest[entry_idx];
                                         map_src1 = (writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1];
-                                        fpu_rs_s0_tag[free_fp_found] = map_src1;
-                                        fpu_rs_s0_ready[free_fp_found] = phys_ready[map_src1];
-                                        fpu_rs_s0_val[free_fp_found] = phys_value[map_src1];
-                                        map_src1 = (writes_dest(op0) && (rt1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rt1];
-                                        fpu_rs_s1_tag[free_fp_found] = map_src1;
-                                        fpu_rs_s1_ready[free_fp_found] = phys_ready[map_src1];
-                                        fpu_rs_s1_val[free_fp_found] = phys_value[map_src1];
+                                        map_src = (writes_dest(op0) && (rt1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rt1];
+                                        fpu_dispatch1_valid = 1'b1;
+                                        fpu_dispatch1_op = op1;
+                                        fpu_dispatch1_rob = entry_idx[4:0];
+                                        fpu_dispatch1_dest = rob_phys_dest[entry_idx];
+                                        fpu_dispatch1_s0_tag = map_src1;
+                                        fpu_dispatch1_s0_ready = phys_ready[map_src1];
+                                        fpu_dispatch1_s0_val = phys_value[map_src1];
+                                        fpu_dispatch1_s1_tag = map_src;
+                                        fpu_dispatch1_s1_ready = phys_ready[map_src];
+                                        fpu_dispatch1_s1_val = phys_value[map_src];
+                                        free_fp_slots = free_fp_slots - 1;
                                     end
 
                                     if (uses_lsq(op1)) begin
-                                        lsq_valid[entry_idx] = 1'b1;
-                                        lsq_issued[entry_idx] = 1'b0;
-                                        lsq_op[entry_idx] = op1;
-                                        lsq_has_dest[entry_idx] = writes_dest(op1);
-                                        lsq_dest[entry_idx] = rob_phys_dest[entry_idx];
-                                        lsq_imm[entry_idx] = imm1;
-                                        lsq_pc[entry_idx] = pc1;
+                                        lsq_dispatch1_valid = 1'b1;
+                                        lsq_dispatch1_rob = entry_idx[4:0];
+                                        lsq_dispatch1_op = op1;
+                                        lsq_dispatch1_has_dest = writes_dest(op1);
+                                        lsq_dispatch1_dest = rob_phys_dest[entry_idx];
+                                        lsq_dispatch1_imm = imm1;
+                                        lsq_dispatch1_pc = pc1;
                                         if (op1 == OP_MOV_ML) begin
                                             map_src1 = (writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1];
-                                            lsq_addr_tag[entry_idx] = map_src1;
-                                            lsq_addr_ready[entry_idx] = phys_ready[map_src1];
-                                            lsq_addr_val[entry_idx] = phys_value[map_src1];
-                                            lsq_data_ready[entry_idx] = 1'b0;
+                                            lsq_dispatch1_addr_tag = map_src1;
+                                            lsq_dispatch1_addr_ready = phys_ready[map_src1];
+                                            lsq_dispatch1_addr_val = phys_value[map_src1];
+                                            lsq_dispatch1_data_ready = 1'b0;
                                         end else if (op1 == OP_MOV_SM) begin
                                             map_src1 = (writes_dest(op0) && (rd1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rd1];
-                                            lsq_addr_tag[entry_idx] = map_src1;
-                                            lsq_addr_ready[entry_idx] = phys_ready[map_src1];
-                                            lsq_addr_val[entry_idx] = phys_value[map_src1];
+                                            lsq_dispatch1_addr_tag = map_src1;
+                                            lsq_dispatch1_addr_ready = phys_ready[map_src1];
+                                            lsq_dispatch1_addr_val = phys_value[map_src1];
                                             map_src1 = (writes_dest(op0) && (rs1 == rd0)) ? rob_phys_dest[rob_tail == 0 ? ROB_SIZE - 1 : rob_tail - 1] : rat[rs1];
-                                            lsq_data_tag[entry_idx] = map_src1;
-                                            lsq_data_ready[entry_idx] = phys_ready[map_src1];
-                                            lsq_data_val[entry_idx] = phys_value[map_src1];
+                                            lsq_dispatch1_data_tag = map_src1;
+                                            lsq_dispatch1_data_ready = phys_ready[map_src1];
+                                            lsq_dispatch1_data_val = phys_value[map_src1];
                                         end else if (op1 == OP_CALL) begin
                                             map_src1 = rat[31];
-                                            lsq_addr_tag[entry_idx] = map_src1;
-                                            lsq_addr_ready[entry_idx] = phys_ready[map_src1];
-                                            lsq_addr_val[entry_idx] = phys_value[map_src1];
-                                            lsq_data_ready[entry_idx] = 1'b1;
-                                            lsq_data_val[entry_idx] = pc1 + 4;
+                                            lsq_dispatch1_addr_tag = map_src1;
+                                            lsq_dispatch1_addr_ready = phys_ready[map_src1];
+                                            lsq_dispatch1_addr_val = phys_value[map_src1];
+                                            lsq_dispatch1_data_ready = 1'b1;
+                                            lsq_dispatch1_data_val = pc1 + 4;
                                         end else if (op1 == OP_RET) begin
                                             map_src1 = rat[31];
-                                            lsq_addr_tag[entry_idx] = map_src1;
-                                            lsq_addr_ready[entry_idx] = phys_ready[map_src1];
-                                            lsq_addr_val[entry_idx] = phys_value[map_src1];
-                                            lsq_data_ready[entry_idx] = 1'b0;
+                                            lsq_dispatch1_addr_tag = map_src1;
+                                            lsq_dispatch1_addr_ready = phys_ready[map_src1];
+                                            lsq_dispatch1_addr_val = phys_value[map_src1];
+                                            lsq_dispatch1_data_ready = 1'b0;
                                         end
+                                    end
+                                    if (op1 == OP_CALL && ret_sp < 16) begin
+                                        ret_stack[ret_sp] = pc1 + 4;
+                                        ret_sp = ret_sp + 1;
                                     end
 
                                     rob_tail = (rob_tail + 1) % ROB_SIZE;
