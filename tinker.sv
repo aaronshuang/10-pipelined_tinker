@@ -482,6 +482,9 @@ module tinker_core (
     reg [5:0] map_src1;
     reg [3:0] word_idx0;
     reg [3:0] word_idx1;
+    wire [63:0] pc;
+
+    assign pc = fetch_pc;
 
     ALU alu0 (.a(alu0_s0_a), .b(alu0_s0_b), .op(alu0_s0_op), .res(alu0_comb_res));
     ALU alu1 (.a(alu1_s0_a), .b(alu1_s0_b), .op(alu1_s0_op), .res(alu1_comb_res));
@@ -882,6 +885,15 @@ module tinker_core (
             fpu_issue_take_idx0 = 3'b0;
             fpu_issue_take1 = 1'b0;
             fpu_issue_take_idx1 = 3'b0;
+
+            // Keep the architectural register seed state visible through the
+            // base physical mappings until a register is renamed away.
+            for (i = 0; i < 32; i = i + 1) begin
+                if (rat[i] == i[5:0]) begin
+                    phys_value[i] = reg_file.registers[i];
+                    phys_ready[i] = 1'b1;
+                end
+            end
 
             if (rob_count > 0 && rob_valid[rob_head] && rob_ready[rob_head]) begin
                 if (rob_has_dest[rob_head]) begin
