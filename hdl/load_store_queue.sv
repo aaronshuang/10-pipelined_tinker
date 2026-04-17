@@ -3,19 +3,19 @@
 module load_store_queue (
     input clk,
     input reset,
-    input [63:0] live_ready,
-    input [4095:0] live_values,
+    input [95:0] live_ready,
+    input [6143:0] live_values,
     input [4:0] rob_head,
     input dispatch0_valid,
     input [4:0] dispatch0_rob,
     input [4:0] dispatch0_op,
     input dispatch0_has_dest,
-    input [5:0] dispatch0_dest,
+    input [6:0] dispatch0_dest,
     input dispatch0_addr_ready,
-    input [5:0] dispatch0_addr_tag,
+    input [6:0] dispatch0_addr_tag,
     input [63:0] dispatch0_addr_val,
     input dispatch0_data_ready,
-    input [5:0] dispatch0_data_tag,
+    input [6:0] dispatch0_data_tag,
     input [63:0] dispatch0_data_val,
     input [11:0] dispatch0_imm,
     input [63:0] dispatch0_pc,
@@ -23,32 +23,32 @@ module load_store_queue (
     input [4:0] dispatch1_rob,
     input [4:0] dispatch1_op,
     input dispatch1_has_dest,
-    input [5:0] dispatch1_dest,
+    input [6:0] dispatch1_dest,
     input dispatch1_addr_ready,
-    input [5:0] dispatch1_addr_tag,
+    input [6:0] dispatch1_addr_tag,
     input [63:0] dispatch1_addr_val,
     input dispatch1_data_ready,
-    input [5:0] dispatch1_data_tag,
+    input [6:0] dispatch1_data_tag,
     input [63:0] dispatch1_data_val,
     input [11:0] dispatch1_imm,
     input [63:0] dispatch1_pc,
     input cdb0_en,
-    input [5:0] cdb0_tag,
+    input [6:0] cdb0_tag,
     input [63:0] cdb0_val,
     input cdb1_en,
-    input [5:0] cdb1_tag,
+    input [6:0] cdb1_tag,
     input [63:0] cdb1_val,
     input cdb2_en,
-    input [5:0] cdb2_tag,
+    input [6:0] cdb2_tag,
     input [63:0] cdb2_val,
     input cdb3_en,
-    input [5:0] cdb3_tag,
+    input [6:0] cdb3_tag,
     input [63:0] cdb3_val,
     input cdb4_en,
-    input [5:0] cdb4_tag,
+    input [6:0] cdb4_tag,
     input [63:0] cdb4_val,
     input cdb5_en,
-    input [5:0] cdb5_tag,
+    input [6:0] cdb5_tag,
     input [63:0] cdb5_val,
     input flush_en,
     input [4:0] flush_rob,
@@ -65,7 +65,7 @@ module load_store_queue (
     output reg [4:0] issue_rob0,
     output reg [4:0] issue_op0,
     output reg issue_has_dest0,
-    output reg [5:0] issue_dest0,
+    output reg [6:0] issue_dest0,
     output reg [63:0] issue_addr0,
     output reg issue_forward_hit0,
     output reg [63:0] issue_forward_data0,
@@ -74,7 +74,7 @@ module load_store_queue (
     output reg [4:0] issue_rob1,
     output reg [4:0] issue_op1,
     output reg issue_has_dest1,
-    output reg [5:0] issue_dest1,
+    output reg [6:0] issue_dest1,
     output reg [63:0] issue_addr1,
     output reg issue_forward_hit1,
     output reg [63:0] issue_forward_data1,
@@ -87,12 +87,12 @@ module load_store_queue (
     reg issued [0:SIZE - 1];
     reg [4:0] op [0:SIZE - 1];
     reg has_dest [0:SIZE - 1];
-    reg [5:0] dest [0:SIZE - 1];
+    reg [6:0] dest [0:SIZE - 1];
     reg addr_ready [0:SIZE - 1];
-    reg [5:0] addr_tag [0:SIZE - 1];
+    reg [6:0] addr_tag [0:SIZE - 1];
     reg [63:0] addr_val [0:SIZE - 1];
     reg data_ready [0:SIZE - 1];
-    reg [5:0] data_tag [0:SIZE - 1];
+    reg [6:0] data_tag [0:SIZE - 1];
     reg [63:0] data_val [0:SIZE - 1];
     reg [11:0] imm [0:SIZE - 1];
     reg [63:0] pc [0:SIZE - 1];
@@ -105,6 +105,7 @@ module load_store_queue (
     reg can_issue;
     reg forward_found;
     reg [63:0] forward_value;
+    reg unknown_alias;
 
     function [63:0] signext12;
         input [11:0] imm_in;
@@ -123,7 +124,7 @@ module load_store_queue (
 
     function live_src_ready;
         input in_ready;
-        input [5:0] in_tag;
+        input [6:0] in_tag;
         begin
             live_src_ready = in_ready || live_ready[in_tag];
         end
@@ -132,7 +133,7 @@ module load_store_queue (
     function [63:0] live_src_value;
         input in_ready;
         input [63:0] in_value;
-        input [5:0] in_tag;
+        input [6:0] in_tag;
         begin
             if (in_ready) live_src_value = in_value;
             else live_src_value = live_values[(in_tag * 64) +: 64];
@@ -164,7 +165,7 @@ module load_store_queue (
 
     task wake_entry;
         input integer idx;
-        input [5:0] wake_tag;
+        input [6:0] wake_tag;
         input [63:0] wake_val;
         begin
             if (valid[idx] && !addr_ready[idx] && (addr_tag[idx] == wake_tag)) begin
@@ -198,8 +199,10 @@ module load_store_queue (
                 forward_value = 64'b0;
                 for (k = 0; k < SIZE; k = k + 1) begin
                     if (valid[k] && ((op[k] == `OP_MOV_SM) || (op[k] == `OP_CALL)) && older_than(k, i)) begin
-                        if (!live_src_ready(addr_ready[k], addr_tag[k])) can_issue = 0;
-                        else if (effective_addr(k) == effective_addr(i)) begin
+                        unknown_alias = !live_src_ready(addr_ready[k], addr_tag[k]);
+                        if (unknown_alias) begin
+                            if (addr_tag[k] == addr_tag[i]) can_issue = 0;
+                        end else if (effective_addr(k) == effective_addr(i)) begin
                             if (!live_src_ready(data_ready[k], data_tag[k])) can_issue = 0;
                             else begin
                                 forward_found = 1;
@@ -227,7 +230,7 @@ module load_store_queue (
         issue_rob0 = (issue0_idx != -1) ? issue0_idx[4:0] : 5'b0;
         issue_op0 = (issue0_idx != -1) ? op[issue0_idx] : 5'b0;
         issue_has_dest0 = (issue0_idx != -1) ? has_dest[issue0_idx] : 1'b0;
-        issue_dest0 = (issue0_idx != -1) ? dest[issue0_idx] : 6'b0;
+        issue_dest0 = (issue0_idx != -1) ? dest[issue0_idx] : 7'b0;
         issue_addr0 = (issue0_idx != -1) ? effective_addr(issue0_idx) : 64'b0;
 
         issue_valid1 = (issue1_idx != -1);
@@ -235,7 +238,7 @@ module load_store_queue (
         issue_rob1 = (issue1_idx != -1) ? issue1_idx[4:0] : 5'b0;
         issue_op1 = (issue1_idx != -1) ? op[issue1_idx] : 5'b0;
         issue_has_dest1 = (issue1_idx != -1) ? has_dest[issue1_idx] : 1'b0;
-        issue_dest1 = (issue1_idx != -1) ? dest[issue1_idx] : 6'b0;
+        issue_dest1 = (issue1_idx != -1) ? dest[issue1_idx] : 7'b0;
         issue_addr1 = (issue1_idx != -1) ? effective_addr(issue1_idx) : 64'b0;
 
         commit_addr = valid[commit_idx] ? effective_addr(commit_idx) : 64'b0;
@@ -249,12 +252,12 @@ module load_store_queue (
                 issued[i] <= 1'b0;
                 op[i] <= 5'b0;
                 has_dest[i] <= 1'b0;
-                dest[i] <= 6'b0;
+                dest[i] <= 7'b0;
                 addr_ready[i] <= 1'b0;
-                addr_tag[i] <= 6'b0;
+                addr_tag[i] <= 7'b0;
                 addr_val[i] <= 64'b0;
                 data_ready[i] <= 1'b0;
-                data_tag[i] <= 6'b0;
+                data_tag[i] <= 7'b0;
                 data_val[i] <= 64'b0;
                 imm[i] <= 12'b0;
                 pc[i] <= 64'b0;

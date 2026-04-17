@@ -3,21 +3,21 @@
 module alu_reservation_station (
     input clk,
     input reset,
-    input [63:0] live_ready,
-    input [4095:0] live_values,
+    input [95:0] live_ready,
+    input [6143:0] live_values,
     input dispatch0_valid,
     input [4:0] dispatch0_op,
     input [4:0] dispatch0_rob,
     input dispatch0_has_dest,
-    input [5:0] dispatch0_dest,
+    input [6:0] dispatch0_dest,
     input dispatch0_s0_ready,
-    input [5:0] dispatch0_s0_tag,
+    input [6:0] dispatch0_s0_tag,
     input [63:0] dispatch0_s0_val,
     input dispatch0_s1_ready,
-    input [5:0] dispatch0_s1_tag,
+    input [6:0] dispatch0_s1_tag,
     input [63:0] dispatch0_s1_val,
     input dispatch0_s2_ready,
-    input [5:0] dispatch0_s2_tag,
+    input [6:0] dispatch0_s2_tag,
     input [63:0] dispatch0_s2_val,
     input [11:0] dispatch0_imm,
     input [63:0] dispatch0_pc,
@@ -25,35 +25,35 @@ module alu_reservation_station (
     input [4:0] dispatch1_op,
     input [4:0] dispatch1_rob,
     input dispatch1_has_dest,
-    input [5:0] dispatch1_dest,
+    input [6:0] dispatch1_dest,
     input dispatch1_s0_ready,
-    input [5:0] dispatch1_s0_tag,
+    input [6:0] dispatch1_s0_tag,
     input [63:0] dispatch1_s0_val,
     input dispatch1_s1_ready,
-    input [5:0] dispatch1_s1_tag,
+    input [6:0] dispatch1_s1_tag,
     input [63:0] dispatch1_s1_val,
     input dispatch1_s2_ready,
-    input [5:0] dispatch1_s2_tag,
+    input [6:0] dispatch1_s2_tag,
     input [63:0] dispatch1_s2_val,
     input [11:0] dispatch1_imm,
     input [63:0] dispatch1_pc,
     input cdb0_en,
-    input [5:0] cdb0_tag,
+    input [6:0] cdb0_tag,
     input [63:0] cdb0_val,
     input cdb1_en,
-    input [5:0] cdb1_tag,
+    input [6:0] cdb1_tag,
     input [63:0] cdb1_val,
     input cdb2_en,
-    input [5:0] cdb2_tag,
+    input [6:0] cdb2_tag,
     input [63:0] cdb2_val,
     input cdb3_en,
-    input [5:0] cdb3_tag,
+    input [6:0] cdb3_tag,
     input [63:0] cdb3_val,
     input cdb4_en,
-    input [5:0] cdb4_tag,
+    input [6:0] cdb4_tag,
     input [63:0] cdb4_val,
     input cdb5_en,
-    input [5:0] cdb5_tag,
+    input [6:0] cdb5_tag,
     input [63:0] cdb5_val,
     input flush_en,
     input [4:0] flush_rob,
@@ -65,7 +65,7 @@ module alu_reservation_station (
     output reg [4:0] issue_op0,
     output reg [4:0] issue_rob0,
     output reg issue_has_dest0,
-    output reg [5:0] issue_dest0,
+    output reg [6:0] issue_dest0,
     output reg [63:0] issue_s0_val0,
     output reg [63:0] issue_s1_val0,
     output reg [63:0] issue_s2_val0,
@@ -76,7 +76,7 @@ module alu_reservation_station (
     output reg [4:0] issue_op1,
     output reg [4:0] issue_rob1,
     output reg issue_has_dest1,
-    output reg [5:0] issue_dest1,
+    output reg [6:0] issue_dest1,
     output reg [63:0] issue_s0_val1,
     output reg [63:0] issue_s1_val1,
     output reg [63:0] issue_s2_val1,
@@ -90,13 +90,13 @@ module alu_reservation_station (
     reg [4:0] op [0:SIZE - 1];
     reg [4:0] rob [0:SIZE - 1];
     reg has_dest [0:SIZE - 1];
-    reg [5:0] dest [0:SIZE - 1];
+    reg [6:0] dest [0:SIZE - 1];
     reg s0_ready [0:SIZE - 1];
     reg s1_ready [0:SIZE - 1];
     reg s2_ready [0:SIZE - 1];
-    reg [5:0] s0_tag [0:SIZE - 1];
-    reg [5:0] s1_tag [0:SIZE - 1];
-    reg [5:0] s2_tag [0:SIZE - 1];
+    reg [6:0] s0_tag [0:SIZE - 1];
+    reg [6:0] s1_tag [0:SIZE - 1];
+    reg [6:0] s2_tag [0:SIZE - 1];
     reg [63:0] s0_val [0:SIZE - 1];
     reg [63:0] s1_val [0:SIZE - 1];
     reg [63:0] s2_val [0:SIZE - 1];
@@ -113,7 +113,7 @@ module alu_reservation_station (
 
     function live_src_ready;
         input in_ready;
-        input [5:0] in_tag;
+        input [6:0] in_tag;
         begin
             live_src_ready = in_ready || live_ready[in_tag];
         end
@@ -122,7 +122,7 @@ module alu_reservation_station (
     function [63:0] live_src_value;
         input in_ready;
         input [63:0] in_value;
-        input [5:0] in_tag;
+        input [6:0] in_tag;
         begin
             if (in_ready) live_src_value = in_value;
             else live_src_value = live_values[(in_tag * 64) +: 64];
@@ -132,11 +132,11 @@ module alu_reservation_station (
     function ready_for_issue;
         input [4:0] in_op;
         input in_s0_ready;
-        input [5:0] in_s0_tag;
+        input [6:0] in_s0_tag;
         input in_s1_ready;
-        input [5:0] in_s1_tag;
+        input [6:0] in_s1_tag;
         input in_s2_ready;
-        input [5:0] in_s2_tag;
+        input [6:0] in_s2_tag;
         begin
             ready_for_issue = 1'b0;
             if (live_src_ready(in_s0_ready, in_s0_tag)) begin
@@ -166,7 +166,7 @@ module alu_reservation_station (
 
     task wake_entry;
         input integer idx;
-        input [5:0] wake_tag;
+        input [6:0] wake_tag;
         input [63:0] wake_val;
         begin
             if (valid[idx] && !s0_ready[idx] && (s0_tag[idx] == wake_tag)) begin
@@ -210,7 +210,7 @@ module alu_reservation_station (
         issue_op0 = (issue0_idx != -1) ? op[issue0_idx] : 5'b0;
         issue_rob0 = (issue0_idx != -1) ? rob[issue0_idx] : 5'b0;
         issue_has_dest0 = (issue0_idx != -1) ? has_dest[issue0_idx] : 1'b0;
-        issue_dest0 = (issue0_idx != -1) ? dest[issue0_idx] : 6'b0;
+        issue_dest0 = (issue0_idx != -1) ? dest[issue0_idx] : 7'b0;
         issue_s0_val0 = (issue0_idx != -1) ? live_src_value(s0_ready[issue0_idx], s0_val[issue0_idx], s0_tag[issue0_idx]) : 64'b0;
         issue_s1_val0 = (issue0_idx != -1) ? live_src_value(s1_ready[issue0_idx], s1_val[issue0_idx], s1_tag[issue0_idx]) : 64'b0;
         issue_s2_val0 = (issue0_idx != -1) ? live_src_value(s2_ready[issue0_idx], s2_val[issue0_idx], s2_tag[issue0_idx]) : 64'b0;
@@ -220,7 +220,7 @@ module alu_reservation_station (
         issue_op1 = (issue1_idx != -1) ? op[issue1_idx] : 5'b0;
         issue_rob1 = (issue1_idx != -1) ? rob[issue1_idx] : 5'b0;
         issue_has_dest1 = (issue1_idx != -1) ? has_dest[issue1_idx] : 1'b0;
-        issue_dest1 = (issue1_idx != -1) ? dest[issue1_idx] : 6'b0;
+        issue_dest1 = (issue1_idx != -1) ? dest[issue1_idx] : 7'b0;
         issue_s0_val1 = (issue1_idx != -1) ? live_src_value(s0_ready[issue1_idx], s0_val[issue1_idx], s0_tag[issue1_idx]) : 64'b0;
         issue_s1_val1 = (issue1_idx != -1) ? live_src_value(s1_ready[issue1_idx], s1_val[issue1_idx], s1_tag[issue1_idx]) : 64'b0;
         issue_s2_val1 = (issue1_idx != -1) ? live_src_value(s2_ready[issue1_idx], s2_val[issue1_idx], s2_tag[issue1_idx]) : 64'b0;
@@ -235,13 +235,13 @@ module alu_reservation_station (
                 op[i] <= 5'b0;
                 rob[i] <= 5'b0;
                 has_dest[i] <= 1'b0;
-                dest[i] <= 6'b0;
+                dest[i] <= 7'b0;
                 s0_ready[i] <= 1'b0;
                 s1_ready[i] <= 1'b0;
                 s2_ready[i] <= 1'b0;
-                s0_tag[i] <= 6'b0;
-                s1_tag[i] <= 6'b0;
-                s2_tag[i] <= 6'b0;
+                s0_tag[i] <= 7'b0;
+                s1_tag[i] <= 7'b0;
+                s2_tag[i] <= 7'b0;
                 s0_val[i] <= 64'b0;
                 s1_val[i] <= 64'b0;
                 s2_val[i] <= 64'b0;

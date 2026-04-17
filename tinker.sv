@@ -16,8 +16,8 @@ module tinker_core (
     localparam ROB_SIZE = 16;
     localparam ALU_RS_SIZE = 8;
     localparam FPU_RS_SIZE = 8;
-    localparam PHYS_REGS = 64;
-    localparam FREE_REGS = 32;
+    localparam PHYS_REGS = 96;
+    localparam FREE_REGS = 64;
 
     localparam OP_AND = 5'h00;
     localparam OP_OR = 5'h01;
@@ -159,10 +159,10 @@ module tinker_core (
     reg [31:0] fetch_words [0:15];
     reg control_stall;
 
-    reg [5:0] rat [0:31];
+    reg [6:0] rat [0:31];
     reg [63:0] phys_value [0:PHYS_REGS - 1];
     reg phys_ready [0:PHYS_REGS - 1];
-    reg [5:0] free_list [0:FREE_REGS - 1];
+    reg [6:0] free_list [0:FREE_REGS - 1];
     integer free_head;
     integer free_tail;
     integer free_count;
@@ -175,8 +175,8 @@ module tinker_core (
     reg rob_store_done [0:ROB_SIZE - 1];
     reg rob_has_dest [0:ROB_SIZE - 1];
     reg [4:0] rob_arch_dest [0:ROB_SIZE - 1];
-    reg [5:0] rob_phys_dest [0:ROB_SIZE - 1];
-    reg [5:0] rob_old_phys [0:ROB_SIZE - 1];
+    reg [6:0] rob_phys_dest [0:ROB_SIZE - 1];
+    reg [6:0] rob_old_phys [0:ROB_SIZE - 1];
     reg [4:0] rob_op [0:ROB_SIZE - 1];
     reg [63:0] rob_pc [0:ROB_SIZE - 1];
     reg [63:0] rob_value [0:ROB_SIZE - 1];
@@ -189,7 +189,7 @@ module tinker_core (
     integer rob_count;
     reg speculative_valid;
     reg [4:0] speculative_rob;
-    reg [5:0] checkpoint_rat [0:31];
+    reg [6:0] checkpoint_rat [0:31];
     integer checkpoint_ret_sp;
     reg flush_en;
     reg [4:0] flush_rob;
@@ -199,15 +199,15 @@ module tinker_core (
     reg [4:0] alu_dispatch0_op;
     reg [4:0] alu_dispatch0_rob;
     reg alu_dispatch0_has_dest;
-    reg [5:0] alu_dispatch0_dest;
+    reg [6:0] alu_dispatch0_dest;
     reg alu_dispatch0_s0_ready;
-    reg [5:0] alu_dispatch0_s0_tag;
+    reg [6:0] alu_dispatch0_s0_tag;
     reg [63:0] alu_dispatch0_s0_val;
     reg alu_dispatch0_s1_ready;
-    reg [5:0] alu_dispatch0_s1_tag;
+    reg [6:0] alu_dispatch0_s1_tag;
     reg [63:0] alu_dispatch0_s1_val;
     reg alu_dispatch0_s2_ready;
-    reg [5:0] alu_dispatch0_s2_tag;
+    reg [6:0] alu_dispatch0_s2_tag;
     reg [63:0] alu_dispatch0_s2_val;
     reg [11:0] alu_dispatch0_imm;
     reg [63:0] alu_dispatch0_pc;
@@ -215,15 +215,15 @@ module tinker_core (
     reg [4:0] alu_dispatch1_op;
     reg [4:0] alu_dispatch1_rob;
     reg alu_dispatch1_has_dest;
-    reg [5:0] alu_dispatch1_dest;
+    reg [6:0] alu_dispatch1_dest;
     reg alu_dispatch1_s0_ready;
-    reg [5:0] alu_dispatch1_s0_tag;
+    reg [6:0] alu_dispatch1_s0_tag;
     reg [63:0] alu_dispatch1_s0_val;
     reg alu_dispatch1_s1_ready;
-    reg [5:0] alu_dispatch1_s1_tag;
+    reg [6:0] alu_dispatch1_s1_tag;
     reg [63:0] alu_dispatch1_s1_val;
     reg alu_dispatch1_s2_ready;
-    reg [5:0] alu_dispatch1_s2_tag;
+    reg [6:0] alu_dispatch1_s2_tag;
     reg [63:0] alu_dispatch1_s2_val;
     reg [11:0] alu_dispatch1_imm;
     reg [63:0] alu_dispatch1_pc;
@@ -231,34 +231,34 @@ module tinker_core (
     reg fpu_dispatch0_valid;
     reg [4:0] fpu_dispatch0_op;
     reg [4:0] fpu_dispatch0_rob;
-    reg [5:0] fpu_dispatch0_dest;
+    reg [6:0] fpu_dispatch0_dest;
     reg fpu_dispatch0_s0_ready;
-    reg [5:0] fpu_dispatch0_s0_tag;
+    reg [6:0] fpu_dispatch0_s0_tag;
     reg [63:0] fpu_dispatch0_s0_val;
     reg fpu_dispatch0_s1_ready;
-    reg [5:0] fpu_dispatch0_s1_tag;
+    reg [6:0] fpu_dispatch0_s1_tag;
     reg [63:0] fpu_dispatch0_s1_val;
     reg fpu_dispatch1_valid;
     reg [4:0] fpu_dispatch1_op;
     reg [4:0] fpu_dispatch1_rob;
-    reg [5:0] fpu_dispatch1_dest;
+    reg [6:0] fpu_dispatch1_dest;
     reg fpu_dispatch1_s0_ready;
-    reg [5:0] fpu_dispatch1_s0_tag;
+    reg [6:0] fpu_dispatch1_s0_tag;
     reg [63:0] fpu_dispatch1_s0_val;
     reg fpu_dispatch1_s1_ready;
-    reg [5:0] fpu_dispatch1_s1_tag;
+    reg [6:0] fpu_dispatch1_s1_tag;
     reg [63:0] fpu_dispatch1_s1_val;
 
     reg lsq_dispatch0_valid;
     reg [4:0] lsq_dispatch0_rob;
     reg [4:0] lsq_dispatch0_op;
     reg lsq_dispatch0_has_dest;
-    reg [5:0] lsq_dispatch0_dest;
+    reg [6:0] lsq_dispatch0_dest;
     reg lsq_dispatch0_addr_ready;
-    reg [5:0] lsq_dispatch0_addr_tag;
+    reg [6:0] lsq_dispatch0_addr_tag;
     reg [63:0] lsq_dispatch0_addr_val;
     reg lsq_dispatch0_data_ready;
-    reg [5:0] lsq_dispatch0_data_tag;
+    reg [6:0] lsq_dispatch0_data_tag;
     reg [63:0] lsq_dispatch0_data_val;
     reg [11:0] lsq_dispatch0_imm;
     reg [63:0] lsq_dispatch0_pc;
@@ -266,12 +266,12 @@ module tinker_core (
     reg [4:0] lsq_dispatch1_rob;
     reg [4:0] lsq_dispatch1_op;
     reg lsq_dispatch1_has_dest;
-    reg [5:0] lsq_dispatch1_dest;
+    reg [6:0] lsq_dispatch1_dest;
     reg lsq_dispatch1_addr_ready;
-    reg [5:0] lsq_dispatch1_addr_tag;
+    reg [6:0] lsq_dispatch1_addr_tag;
     reg [63:0] lsq_dispatch1_addr_val;
     reg lsq_dispatch1_data_ready;
-    reg [5:0] lsq_dispatch1_data_tag;
+    reg [6:0] lsq_dispatch1_data_tag;
     reg [63:0] lsq_dispatch1_data_val;
     reg [11:0] lsq_dispatch1_imm;
     reg [63:0] lsq_dispatch1_pc;
@@ -281,7 +281,7 @@ module tinker_core (
     reg [4:0] alu0_s0_op;
     reg [4:0] alu0_s0_rob;
     reg alu0_s0_has_dest;
-    reg [5:0] alu0_s0_dest;
+    reg [6:0] alu0_s0_dest;
     reg [63:0] alu0_s0_a;
     reg [63:0] alu0_s0_b;
     reg [63:0] alu0_s0_c;
@@ -289,7 +289,7 @@ module tinker_core (
     reg [63:0] alu0_s0_pc;
     reg [4:0] alu0_s1_rob;
     reg alu0_s1_has_dest;
-    reg [5:0] alu0_s1_dest;
+    reg [6:0] alu0_s1_dest;
     reg [63:0] alu0_s1_res;
     reg alu0_s1_branch_valid;
     reg alu0_s1_taken;
@@ -300,7 +300,7 @@ module tinker_core (
     reg [4:0] alu1_s0_op;
     reg [4:0] alu1_s0_rob;
     reg alu1_s0_has_dest;
-    reg [5:0] alu1_s0_dest;
+    reg [6:0] alu1_s0_dest;
     reg [63:0] alu1_s0_a;
     reg [63:0] alu1_s0_b;
     reg [63:0] alu1_s0_c;
@@ -308,7 +308,7 @@ module tinker_core (
     reg [63:0] alu1_s0_pc;
     reg [4:0] alu1_s1_rob;
     reg alu1_s1_has_dest;
-    reg [5:0] alu1_s1_dest;
+    reg [6:0] alu1_s1_dest;
     reg [63:0] alu1_s1_res;
     reg alu1_s1_branch_valid;
     reg alu1_s1_taken;
@@ -317,7 +317,7 @@ module tinker_core (
     reg fpu0_valid [0:4];
     reg [4:0] fpu0_op [0:4];
     reg [4:0] fpu0_rob [0:4];
-    reg [5:0] fpu0_dest [0:4];
+    reg [6:0] fpu0_dest [0:4];
     reg [63:0] fpu0_a [0:4];
     reg [63:0] fpu0_b [0:4];
     reg [63:0] fpu0_res [0:4];
@@ -325,7 +325,7 @@ module tinker_core (
     reg fpu1_valid [0:4];
     reg [4:0] fpu1_op [0:4];
     reg [4:0] fpu1_rob [0:4];
-    reg [5:0] fpu1_dest [0:4];
+    reg [6:0] fpu1_dest [0:4];
     reg [63:0] fpu1_a [0:4];
     reg [63:0] fpu1_b [0:4];
     reg [63:0] fpu1_res [0:4];
@@ -335,13 +335,13 @@ module tinker_core (
     reg [4:0] ls0_s0_op;
     reg [4:0] ls0_s0_rob;
     reg ls0_s0_has_dest;
-    reg [5:0] ls0_s0_dest;
+    reg [6:0] ls0_s0_dest;
     reg [63:0] ls0_s0_addr;
     reg [63:0] ls0_s0_forward_data;
     reg ls0_s0_forward_hit;
     reg [4:0] ls0_s1_rob;
     reg ls0_s1_has_dest;
-    reg [5:0] ls0_s1_dest;
+    reg [6:0] ls0_s1_dest;
     reg [63:0] ls0_s1_res;
     reg ls0_s1_is_ret;
 
@@ -350,13 +350,13 @@ module tinker_core (
     reg [4:0] ls1_s0_op;
     reg [4:0] ls1_s0_rob;
     reg ls1_s0_has_dest;
-    reg [5:0] ls1_s0_dest;
+    reg [6:0] ls1_s0_dest;
     reg [63:0] ls1_s0_addr;
     reg [63:0] ls1_s0_forward_data;
     reg ls1_s0_forward_hit;
     reg [4:0] ls1_s1_rob;
     reg ls1_s1_has_dest;
-    reg [5:0] ls1_s1_dest;
+    reg [6:0] ls1_s1_dest;
     reg [63:0] ls1_s1_res;
     reg ls1_s1_is_ret;
 
@@ -373,15 +373,15 @@ module tinker_core (
     wire [63:0] bp_predict_target;
     wire bp_predict_taken1;
     wire [63:0] bp_predict_target1;
-    wire [63:0] phys_ready_bus;
-    wire [4095:0] phys_value_bus;
+    wire [95:0] phys_ready_bus;
+    wire [6143:0] phys_value_bus;
     wire [3:0] alu_rs_free_count;
     wire [3:0] fpu_rs_free_count;
     wire alu_issue_valid0;
     wire [4:0] alu_issue_op0;
     wire [4:0] alu_issue_rob0;
     wire alu_issue_has_dest0;
-    wire [5:0] alu_issue_dest0;
+    wire [6:0] alu_issue_dest0;
     wire [63:0] alu_issue_s0_val0;
     wire [63:0] alu_issue_s1_val0;
     wire [63:0] alu_issue_s2_val0;
@@ -392,7 +392,7 @@ module tinker_core (
     wire [4:0] alu_issue_op1;
     wire [4:0] alu_issue_rob1;
     wire alu_issue_has_dest1;
-    wire [5:0] alu_issue_dest1;
+    wire [6:0] alu_issue_dest1;
     wire [63:0] alu_issue_s0_val1;
     wire [63:0] alu_issue_s1_val1;
     wire [63:0] alu_issue_s2_val1;
@@ -402,14 +402,14 @@ module tinker_core (
     wire fpu_issue_valid0;
     wire [4:0] fpu_issue_op0;
     wire [4:0] fpu_issue_rob0;
-    wire [5:0] fpu_issue_dest0;
+    wire [6:0] fpu_issue_dest0;
     wire [63:0] fpu_issue_s0_val0;
     wire [63:0] fpu_issue_s1_val0;
     wire [2:0] fpu_issue_idx0;
     wire fpu_issue_valid1;
     wire [4:0] fpu_issue_op1;
     wire [4:0] fpu_issue_rob1;
-    wire [5:0] fpu_issue_dest1;
+    wire [6:0] fpu_issue_dest1;
     wire [63:0] fpu_issue_s0_val1;
     wire [63:0] fpu_issue_s1_val1;
     wire [2:0] fpu_issue_idx1;
@@ -422,7 +422,7 @@ module tinker_core (
     wire [4:0] lsq_issue_rob0;
     wire [4:0] lsq_issue_op0;
     wire lsq_issue_has_dest0;
-    wire [5:0] lsq_issue_dest0;
+    wire [6:0] lsq_issue_dest0;
     wire [63:0] lsq_issue_addr0;
     wire lsq_issue_forward_hit0;
     wire [63:0] lsq_issue_forward_data0;
@@ -431,7 +431,7 @@ module tinker_core (
     wire [4:0] lsq_issue_rob1;
     wire [4:0] lsq_issue_op1;
     wire lsq_issue_has_dest1;
-    wire [5:0] lsq_issue_dest1;
+    wire [6:0] lsq_issue_dest1;
     wire [63:0] lsq_issue_addr1;
     wire lsq_issue_forward_hit1;
     wire [63:0] lsq_issue_forward_data1;
@@ -439,22 +439,22 @@ module tinker_core (
     wire [63:0] lsq_commit_addr;
     wire [63:0] lsq_commit_data;
     wire cdb0_en;
-    wire [5:0] cdb0_tag;
+    wire [6:0] cdb0_tag;
     wire [63:0] cdb0_val;
     wire cdb1_en;
-    wire [5:0] cdb1_tag;
+    wire [6:0] cdb1_tag;
     wire [63:0] cdb1_val;
     wire cdb2_en;
-    wire [5:0] cdb2_tag;
+    wire [6:0] cdb2_tag;
     wire [63:0] cdb2_val;
     wire cdb3_en;
-    wire [5:0] cdb3_tag;
+    wire [6:0] cdb3_tag;
     wire [63:0] cdb3_val;
     wire cdb4_en;
-    wire [5:0] cdb4_tag;
+    wire [6:0] cdb4_tag;
     wire [63:0] cdb4_val;
     wire cdb5_en;
-    wire [5:0] cdb5_tag;
+    wire [6:0] cdb5_tag;
     wire [63:0] cdb5_val;
     reg lsq_clear_en;
     reg [4:0] lsq_clear_idx;
@@ -502,11 +502,11 @@ module tinker_core (
     reg [11:0] imm1;
     reg [63:0] pc0;
     reg [63:0] pc1;
-    reg [5:0] new_phys;
-    reg [5:0] new_phys1;
-    reg [5:0] old_phys1;
-    reg [5:0] map_src;
-    reg [5:0] map_src1;
+    reg [6:0] new_phys;
+    reg [6:0] new_phys1;
+    reg [6:0] old_phys1;
+    reg [6:0] map_src;
+    reg [6:0] map_src1;
     reg [3:0] word_idx0;
     reg [3:0] word_idx1;
     wire [63:0] pc;
@@ -900,7 +900,7 @@ module tinker_core (
     );
 
     task broadcast_result;
-        input [5:0] tag;
+        input [6:0] tag;
         input [63:0] value;
         begin
             phys_value[tag] = value;
@@ -1104,7 +1104,7 @@ module tinker_core (
             end
 
             for (i = 0; i < 32; i = i + 1) begin
-                rat[i] = i[5:0];
+                rat[i] = i[6:0];
             end
 
             for (i = 0; i < PHYS_REGS; i = i + 1) begin
@@ -1120,8 +1120,8 @@ module tinker_core (
                 rob_store_done[i] = 1'b0;
                 rob_has_dest[i] = 1'b0;
                 rob_arch_dest[i] = 5'b0;
-                rob_phys_dest[i] = 6'b0;
-                rob_old_phys[i] = 6'b0;
+                rob_phys_dest[i] = 7'b0;
+                rob_old_phys[i] = 7'b0;
                 rob_op[i] = 5'b0;
                 rob_pc[i] = 64'b0;
                 rob_value[i] = 64'b0;
@@ -1160,8 +1160,8 @@ module tinker_core (
                 fpu1_op[i] = 5'b0;
                 fpu0_rob[i] = 5'b0;
                 fpu1_rob[i] = 5'b0;
-                fpu0_dest[i] = 6'b0;
-                fpu1_dest[i] = 6'b0;
+                fpu0_dest[i] = 7'b0;
+                fpu1_dest[i] = 7'b0;
                 fpu0_a[i] = 64'b0;
                 fpu0_b[i] = 64'b0;
                 fpu1_a[i] = 64'b0;
@@ -1213,7 +1213,7 @@ module tinker_core (
             // Keep the architectural register seed state visible through the
             // base physical mappings until a register is renamed away.
             for (i = 0; i < 32; i = i + 1) begin
-                if (rat[i] == i[5:0]) begin
+                if (rat[i] == i[6:0]) begin
                     phys_value[i] = reg_file.registers[i];
                     phys_ready[i] = 1'b1;
                 end
@@ -1629,8 +1629,8 @@ module tinker_core (
                                 phys_ready[new_phys] = 1'b0;
                                 phys_value[new_phys] = 64'b0;
                             end else begin
-                                rob_phys_dest[entry_idx] = 6'b0;
-                                rob_old_phys[entry_idx] = 6'b0;
+                                rob_phys_dest[entry_idx] = 7'b0;
+                                rob_old_phys[entry_idx] = 7'b0;
                             end
 
                             if (uses_alu_rs(op0)) begin
@@ -1939,8 +1939,8 @@ module tinker_core (
                                         phys_ready[new_phys1] = 1'b0;
                                         phys_value[new_phys1] = 64'b0;
                                     end else begin
-                                        rob_phys_dest[entry_idx] = 6'b0;
-                                        rob_old_phys[entry_idx] = 6'b0;
+                                        rob_phys_dest[entry_idx] = 7'b0;
+                                        rob_old_phys[entry_idx] = 7'b0;
                                     end
 
                                     if (uses_alu_rs(op1)) begin
