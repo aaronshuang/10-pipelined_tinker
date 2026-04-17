@@ -13,9 +13,9 @@ module tinker_core (
     input reset,
     output logic hlt
 );
-    localparam ROB_SIZE = 32;
-    localparam ALU_RS_SIZE = 8;
-    localparam FPU_RS_SIZE = 8;
+    localparam ROB_SIZE = 16;
+    localparam ALU_RS_SIZE = 4;
+    localparam FPU_RS_SIZE = 4;
     localparam PHYS_REGS = 96;
     localparam FREE_REGS = 64;
 
@@ -214,6 +214,7 @@ module tinker_core (
     reg [4:0] speculative_rob;
     reg [6:0] checkpoint_rat [0:31];
     integer checkpoint_ret_sp;
+    reg seed_sync_pending;
     reg flush_en;
     reg [4:0] flush_rob;
     reg [4:0] flush_tail;
@@ -1075,7 +1076,7 @@ module tinker_core (
             rob_taken[rob_idx_in] = taken_in;
             rob_target[rob_idx_in] = target_in;
             if (rob_op[rob_idx_in] == OP_CALL) begin
-                if (rob_store_done[rob_idx_in]) rob_ready[rob_idx_in] = 1'b1;
+                if (lsq_store_ready_bus[rob_idx_in]) rob_ready[rob_idx_in] = 1'b1;
             end else begin
                 rob_ready[rob_idx_in] = 1'b1;
             end
@@ -1128,6 +1129,7 @@ module tinker_core (
             rob_count = 0;
             speculative_valid = 1'b0;
             speculative_rob = 5'b0;
+            seed_sync_pending = 1'b1;
             flush_en = 1'b0;
             flush_rob = 5'b0;
             flush_tail = 5'b0;
@@ -1257,16 +1259,20 @@ module tinker_core (
             fast_mem_opcode_dbg = 5'b0;
             fast_store_forward_dbg = 1'b0;
 
-            // Keep the architectural register seed state visible through the
-            // base physical mappings until a register is renamed away.
-            for (i = 0; i < 32; i = i + 1) begin
-                if (rat[i] == i[6:0]) begin
-                    phys_value[i] = reg_file.registers[i];
-                    phys_ready[i] = 1'b1;
+            if (seed_sync_pending) begin
+                for (i = 0; i < 32; i = i + 1) begin
+                    if (rat[i] == i[6:0]) begin
+                        phys_value[i] = reg_file.registers[i];
+                        phys_ready[i] = 1'b1;
+                    end
                 end
+                seed_sync_pending = 1'b0;
             end
 
-            if (rob_count > 0 && rob_valid[rob_head] && rob_ready[rob_head]) begin
+            if (rob_count > 0 && rob_valid[rob_head] &&
+                (rob_ready[rob_head] ||
+                 ((rob_op[rob_head] == OP_MOV_SM) && lsq_store_ready_bus[rob_head]) ||
+                 ((rob_op[rob_head] == OP_CALL) && rob_branch_done[rob_head] && lsq_store_ready_bus[rob_head]))) begin
                 j = rob_head;
 
                 if (rob_has_dest[j]) begin
@@ -1301,7 +1307,10 @@ module tinker_core (
 
                 if (rob_op[j] == OP_PRIV) begin
                     hlt = 1'b1;
-                end else if ((rob_count > 0) && rob_valid[rob_head] && rob_ready[rob_head] &&
+                end else if ((rob_count > 0) && rob_valid[rob_head] &&
+                    (rob_ready[rob_head] ||
+                     ((rob_op[rob_head] == OP_MOV_SM) && lsq_store_ready_bus[rob_head]) ||
+                     ((rob_op[rob_head] == OP_CALL) && rob_branch_done[rob_head] && lsq_store_ready_bus[rob_head])) &&
                     (rob_op[rob_head] != OP_PRIV) &&
                     (!has_commit_mem_side_effect(rob_op[j]) || !has_commit_mem_side_effect(rob_op[rob_head]))) begin
                     k = rob_head;
@@ -1388,14 +1397,6 @@ module tinker_core (
                     rob_value[ls1_s1_rob] = ls1_s1_res;
                     if (ret_sp > 0) ret_sp = ret_sp - 1;
                     resolve_branch(ls1_s1_rob, 1'b1, ls1_s1_res, rob_pc[ls1_s1_rob]);
-                end
-            end
-
-            for (i = 0; i < ROB_SIZE; i = i + 1) begin
-                if (lsq_store_ready_bus[i] && !rob_store_done[i] && (rob_op[i] == OP_MOV_SM || rob_op[i] == OP_CALL)) begin
-                    rob_store_done[i] = 1'b1;
-                    if (rob_op[i] == OP_MOV_SM) rob_ready[i] = 1'b1;
-                    else if (rob_branch_done[i]) rob_ready[i] = 1'b1;
                 end
             end
 

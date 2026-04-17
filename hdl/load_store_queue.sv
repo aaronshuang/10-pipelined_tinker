@@ -60,7 +60,7 @@ module load_store_queue (
     input issue_take0,
     input issue_take1,
     input [4:0] commit_idx,
-    output reg [31:0] store_ready_bus,
+    output reg [15:0] store_ready_bus,
     output reg issue_valid0,
     output reg [4:0] issue_rob0,
     output reg [4:0] issue_op0,
@@ -82,7 +82,7 @@ module load_store_queue (
     output reg [63:0] commit_addr,
     output reg [63:0] commit_data
 );
-    localparam SIZE = 32;
+    localparam SIZE = 16;
     reg valid [0:SIZE - 1];
     reg issued [0:SIZE - 1];
     reg [4:0] op [0:SIZE - 1];

@@ -64,7 +64,7 @@ module fpu_reservation_station (
     output reg [63:0] issue_s1_val1,
     output reg [2:0] issue_idx1
 );
-    localparam SIZE = 8;
+    localparam SIZE = 4;
     reg valid [0:SIZE - 1];
     reg [4:0] op [0:SIZE - 1];
     reg [4:0] rob [0:SIZE - 1];
@@ -114,8 +114,8 @@ module fpu_reservation_station (
         begin
             dc = rob_idx - flush_rob;
             du = flush_tail - flush_rob;
-            if (dc < 0) dc = dc + 32;
-            if (du < 0) du = du + 32;
+            if (dc < 0) dc = dc + 16;
+            if (du < 0) du = du + 16;
             younger_than_flush = (dc > 0) && (dc < du);
         end
     endfunction

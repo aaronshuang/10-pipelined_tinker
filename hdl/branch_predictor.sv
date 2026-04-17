@@ -12,7 +12,7 @@ module branch_predictor (
     input update_taken,
     input [63:0] update_target
 );
-    localparam ENTRIES = 128;
+    localparam ENTRIES = 64;
 
     reg valid [0:ENTRIES - 1];
     reg [1:0] counter [0:ENTRIES - 1];

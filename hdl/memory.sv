@@ -6,7 +6,7 @@ module memory (
     input mem_read,
     output [63:0] read_data
 );
-    parameter MEM_SIZE = 524288;
+    parameter MEM_SIZE = 131072;
     reg [7:0] bytes [0:MEM_SIZE - 1];
     integer i;
 
