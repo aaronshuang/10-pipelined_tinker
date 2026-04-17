@@ -60,7 +60,7 @@ module load_store_queue (
     input issue_take0,
     input issue_take1,
     input [4:0] commit_idx,
-    output reg [15:0] store_ready_bus,
+    output reg [31:0] store_ready_bus,
     output reg issue_valid0,
     output reg [4:0] issue_rob0,
     output reg [4:0] issue_op0,
@@ -82,7 +82,7 @@ module load_store_queue (
     output reg [63:0] commit_addr,
     output reg [63:0] commit_data
 );
-    localparam SIZE = 16;
+    localparam SIZE = 32;
     reg valid [0:SIZE - 1];
     reg issued [0:SIZE - 1];
     reg [4:0] op [0:SIZE - 1];
@@ -119,6 +119,14 @@ module load_store_queue (
         begin
             effective_addr = live_src_value(addr_ready[idx], addr_val[idx], addr_tag[idx]) +
                 ((op[idx] == `OP_CALL || op[idx] == `OP_RET) ? 64'hfffffffffffffff8 : signext12(imm[idx]));
+        end
+    endfunction
+
+    function [63:0] addr_offset;
+        input integer idx;
+        begin
+            addr_offset = ((op[idx] == `OP_CALL || op[idx] == `OP_RET) ?
+                64'hfffffffffffffff8 : signext12(imm[idx]));
         end
     endfunction
 
@@ -201,7 +209,8 @@ module load_store_queue (
                     if (valid[k] && ((op[k] == `OP_MOV_SM) || (op[k] == `OP_CALL)) && older_than(k, i)) begin
                         unknown_alias = !live_src_ready(addr_ready[k], addr_tag[k]);
                         if (unknown_alias) begin
-                            if (addr_tag[k] == addr_tag[i]) can_issue = 0;
+                            if ((addr_tag[k] == addr_tag[i]) &&
+                                (addr_offset(k) == addr_offset(i))) can_issue = 0;
                         end else if (effective_addr(k) == effective_addr(i)) begin
                             if (!live_src_ready(data_ready[k], data_tag[k])) can_issue = 0;
                             else begin

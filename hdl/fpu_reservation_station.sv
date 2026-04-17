@@ -114,8 +114,8 @@ module fpu_reservation_station (
         begin
             dc = rob_idx - flush_rob;
             du = flush_tail - flush_rob;
-            if (dc < 0) dc = dc + 16;
-            if (du < 0) du = du + 16;
+            if (dc < 0) dc = dc + 32;
+            if (du < 0) du = du + 32;
             younger_than_flush = (dc > 0) && (dc < du);
         end
     endfunction
