@@ -437,7 +437,9 @@ module tinker_core (
     wire cdb5_en;
     wire [5:0] cdb5_tag;
     wire [63:0] cdb5_val;
-    wire lsq_clear_en;
+    reg lsq_clear_en;
+    reg [4:0] lsq_clear_idx;
+    reg [4:0] lsq_commit_idx;
 
     reg arch_write_enable;
     reg [4:0] arch_write_rd;
@@ -453,6 +455,7 @@ module tinker_core (
     integer i;
     integer j;
     integer k;
+    integer debug_rs_idx;
     integer idx;
     integer entry_idx;
     integer free_rs_slots;
@@ -483,8 +486,16 @@ module tinker_core (
     reg [3:0] word_idx0;
     reg [3:0] word_idx1;
     wire [63:0] pc;
+    wire decode_valid;
+    wire [31:0] IR;
+    reg int_rs_valid [0:7];
+    reg [4:0] int_rs_opcode [0:7];
+    reg decode_valid_dbg;
+    reg [31:0] ir_dbg;
 
     assign pc = fetch_pc;
+    assign decode_valid = decode_valid_dbg;
+    assign IR = ir_dbg;
 
     ALU alu0 (.a(alu0_s0_a), .b(alu0_s0_b), .op(alu0_s0_op), .res(alu0_comb_res));
     ALU alu1 (.a(alu1_s0_a), .b(alu1_s0_b), .op(alu1_s0_op), .res(alu1_comb_res));
@@ -544,8 +555,6 @@ module tinker_core (
     assign cdb5_en = ls1_s1_valid && ls1_s1_has_dest;
     assign cdb5_tag = ls1_s1_dest;
     assign cdb5_val = ls1_s1_res;
-    assign lsq_clear_en = (rob_count > 0) && rob_valid[rob_head] && rob_ready[rob_head];
-
     genvar g;
     generate
         for (g = 0; g < PHYS_REGS; g = g + 1) begin : phys_bus_pack
@@ -553,6 +562,21 @@ module tinker_core (
             assign phys_value_bus[(g * 64) +: 64] = phys_value[g];
         end
     endgenerate
+
+    always @(*) begin
+        for (debug_rs_idx = 0; debug_rs_idx < 8; debug_rs_idx = debug_rs_idx + 1) begin
+            int_rs_valid[debug_rs_idx] = 1'b0;
+            int_rs_opcode[debug_rs_idx] = 5'b0;
+        end
+        debug_rs_idx = 0;
+        for (i = 0; i < 8; i = i + 1) begin
+            if (alu_rs.valid[i] && (debug_rs_idx < 8)) begin
+                int_rs_valid[debug_rs_idx] = 1'b1;
+                int_rs_opcode[debug_rs_idx] = alu_rs.op[i];
+                debug_rs_idx = debug_rs_idx + 1;
+            end
+        end
+    end
 
     alu_reservation_station alu_rs (
         .clk(~clk),
@@ -715,10 +739,10 @@ module tinker_core (
         .cdb4_en(cdb4_en), .cdb4_tag(cdb4_tag), .cdb4_val(cdb4_val),
         .cdb5_en(cdb5_en), .cdb5_tag(cdb5_tag), .cdb5_val(cdb5_val),
         .clear_en(lsq_clear_en),
-        .clear_idx(rob_head[4:0]),
+        .clear_idx(lsq_clear_idx),
         .issue_take0(lsq_issue_valid0),
         .issue_take1(lsq_issue_valid1),
-        .commit_idx(rob_head[4:0]),
+        .commit_idx(lsq_commit_idx),
         .store_ready_bus(lsq_store_ready_bus),
         .issue_valid0(lsq_issue_valid0),
         .issue_rob0(lsq_issue_rob0),
@@ -797,6 +821,8 @@ module tinker_core (
             bp_update_pc = 64'b0;
             bp_update_taken = 1'b0;
             bp_update_target = 64'b0;
+            decode_valid_dbg = 1'b0;
+            ir_dbg = 32'b0;
 
             rob_head = 0;
             rob_tail = 0;
@@ -846,6 +872,9 @@ module tinker_core (
             fpu_issue_take_idx0 = 3'b0;
             fpu_issue_take1 = 1'b0;
             fpu_issue_take_idx1 = 3'b0;
+            lsq_clear_en = 1'b0;
+            lsq_clear_idx = 5'b0;
+            lsq_commit_idx = 5'b0;
 
             alu0_s0_valid = 1'b0;
             alu0_s1_valid = 1'b0;
@@ -872,6 +901,8 @@ module tinker_core (
                 fpu1_res[i] = 64'b0;
             end
         end else if (!hlt) begin
+            decode_valid_dbg = alu_dispatch0_valid || fpu_dispatch0_valid || lsq_dispatch0_valid;
+            ir_dbg = inst0;
             arch_write_enable = 1'b0;
             commit_mem_write = 1'b0;
             bp_update_en = 1'b0;
@@ -885,6 +916,9 @@ module tinker_core (
             fpu_issue_take_idx0 = 3'b0;
             fpu_issue_take1 = 1'b0;
             fpu_issue_take_idx1 = 3'b0;
+            lsq_clear_en = 1'b0;
+            lsq_clear_idx = rob_head[4:0];
+            lsq_commit_idx = rob_head[4:0];
 
             // Keep the architectural register seed state visible through the
             // base physical mappings until a register is renamed away.
@@ -907,6 +941,9 @@ module tinker_core (
                     commit_mem_addr = lsq_commit_addr;
                     commit_mem_data = lsq_commit_data;
                 end
+
+                lsq_clear_en = 1'b1;
+                lsq_clear_idx = rob_head[4:0];
 
                 if (rob_has_dest[rob_head]) begin
                     if (rob_old_phys[rob_head] >= 32) begin
