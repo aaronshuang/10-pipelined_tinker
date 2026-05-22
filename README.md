@@ -1,4 +1,4 @@
-# Pipelined Tinker
+# Tinker CPU Core
 
 This repository contains a modular pipelined Tinker implementation with:
 
